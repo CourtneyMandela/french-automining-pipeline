@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Run the local Stage 1 filter (§6) on a weekly LingQ PDF drop -- both
-single words and collocations (§7) -- then Stage 2 API scoring and
-(optionally) card generation + writing, if ANTHROPIC_API_KEY is set.
+"""Sync the words you looked up on LingQ straight into the pipeline — no PDF
+drop. Pulls your LingQs via the LingQ API, mines the ones that are genuine
+i+1 given your Anki state, and (with --write) generates + writes + reorders.
 
-Requires the French spaCy model, which this sandboxed session couldn't
-download (GitHub releases are blocked here) — run this on your own machine
-after `python -m spacy download fr_core_news_sm`, with Anki + AnkiConnect
-running so real vocabulary state can be read.
+This is the "read on LingQ, cards appear" entry point. Run it on the machine
+where Anki is open, on a schedule (see README for cron/launchd/Task
+Scheduler) for a fully hands-off weekly sync.
 
-    .venv/bin/python scripts/mine_lingq_pdf.py path/to/reading.pdf
-    .venv/bin/python scripts/mine_lingq_pdf.py path/to/reading.pdf --write 20
+Requires (see README): the French spaCy model, ANTHROPIC_API_KEY, and
+LINGQ_API_KEY (+ optional LINGQ_LANGUAGE_CODE, default "fr") in .env.
+
+    .venv/bin/python scripts/mine_lingq_api.py
+    .venv/bin/python scripts/mine_lingq_api.py --write 20
 """
 import argparse
 import os
@@ -18,10 +20,9 @@ from french_mining.anki.collocation_note_type import MODEL_NAME as COLLOCATION_M
 from french_mining.anki.connect import AnkiConnectClient
 from french_mining.anki.note_type import DEFAULT_DECK_NAME, MODEL_NAME
 from french_mining.anki.vocab_state import VocabularyState
-from french_mining.candidates import find_i_plus_1_candidates, select_best_sentences
-from french_mining.collocations import find_collocation_candidates, load_collocations
+from french_mining.candidates import select_best_sentences
 from french_mining.frequency import FrequencyList
-from french_mining.lingq.pdf_extract import extract_text
+from french_mining.lingq.api import LingQClient, build_lingq_candidates, locate_term
 from french_mining.nlp import parse_text
 from french_mining.queue_ordering import (
     get_new_backlog_note_ids,
@@ -32,20 +33,39 @@ from french_mining.scoring import build_client, keep_and_rank, score_candidates
 from french_mining.text_pipeline import write_ranked_candidates
 
 
+def _parse_fragment(fragment: str, term: str):
+    """Parse a LingQ fragment and return the single sentence containing the
+    term (fragments are usually one sentence, but can spill into two)."""
+    sentences = parse_text(fragment)
+    for sentence in sentences:
+        if locate_term(sentence.tokens, term) is not None:
+            return sentence
+    return sentences[0] if sentences else None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pdf_path")
     parser.add_argument(
         "--write",
         type=int,
         default=0,
         metavar="N",
-        help="Generate full card content and write the top N ranked candidates to Anki (default: 0, dry run only).",
+        help="Generate and write the top N ranked candidates to Anki (default: 0, dry run only).",
     )
+    parser.add_argument("--max-pages", type=int, default=10, help="Max LingQ API pages to pull.")
     args = parser.parse_args()
 
-    text = extract_text(args.pdf_path)
-    sentences = parse_text(text)
+    lingq_client = LingQClient()
+    cards = lingq_client.fetch_lingqs(max_pages=args.max_pages)
+    print(f"Pulled {len(cards)} LingQ(s) from LingQ ({lingq_client.language_code}).\n")
+
+    items = []
+    for card in cards:
+        if not card.term or not card.fragment:
+            continue
+        sentence = _parse_fragment(card.fragment, card.term)
+        if sentence is not None:
+            items.append((card, sentence))
 
     anki_client = AnkiConnectClient()
     vocab_state = VocabularyState.build(
@@ -54,18 +74,12 @@ def main() -> None:
         collocation_model_names=[COLLOCATION_MODEL_NAME],
     )
 
-    word_candidates = find_i_plus_1_candidates(sentences, vocab_state, source=args.pdf_path)
-    collocation_candidates = find_collocation_candidates(
-        sentences, vocab_state, load_collocations(), source=args.pdf_path
-    )
-    # Single words and collocations share the same backlog and compete for
-    # the same daily slots (§7), so they're selected/scored/ranked together.
-    best = select_best_sentences(word_candidates + collocation_candidates)
+    candidates = build_lingq_candidates(items, vocab_state)
+    best = select_best_sentences(candidates)
 
     print(
-        f"{len(sentences)} sentences -> {len(word_candidates)} word + "
-        f"{len(collocation_candidates)} collocation i+1 candidates "
-        f"-> {len(best)} after local best-sentence selection\n"
+        f"{len(items)} parseable LingQ(s) -> {len(candidates)} i+1 candidate(s) "
+        f"(after Anki dedup) -> {len(best)} after best-sentence selection\n"
     )
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -99,8 +113,6 @@ def main() -> None:
     if args.write > 0:
         to_write = ranked[: args.write]
         print(f"\nGenerating content and resolving images for {len(to_write)} card(s)...")
-        # LingQ PDFs have no video frame, so images only ever reach the
-        # Unsplash tier (§10 tier 1, source frame, is YouTube-only).
         note_ids = write_ranked_candidates(
             anki_client, anthropic_client, to_write, image_work_dir="lingq_work/images"
         )

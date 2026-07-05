@@ -30,6 +30,11 @@ layer, the vocabulary state model, and the note type + write path.
 
 All ten build-order steps from the spec are now implemented.
 
+Beyond the original spec:
+
+- [x] LingQ API sync — read on LingQ, looked-up words auto-flow into the
+  pipeline with no PDF drop (`french_mining.lingq.api`, `scripts/mine_lingq_api.py`)
+
 ## Important: this must run on the same machine as Anki
 
 AnkiConnect listens on `http://127.0.0.1:8765` and only accepts connections
@@ -146,6 +151,69 @@ That script runs the full local Stage 1 chain (PDF -> spaCy -> vocab state
 via AnkiConnect -> i+1 filter -> best-sentence selection) and prints the
 surviving candidates, so you can sanity-check it against a real reading
 before anything gets API-scored.
+
+## LingQ API sync — "read on LingQ, cards appear" (extends §4)
+
+The hands-off alternative to the PDF drop: read on LingQ, look up the words
+you don't know (create LingQs), and `scripts/mine_lingq_api.py` syncs them
+into Anki automatically. `french_mining.lingq.api` pulls your LingQs from
+the LingQ v3 API (`GET /api/v3/{lang}/cards/`, `Authorization: Token <key>`).
+Each LingQ already carries the sentence you met it in (`fragment`), so it's
+a **stronger** candidate source than the PDF path — you've directly told the
+pipeline which word you didn't know, and given it the context.
+
+Crucially, LingQ stays *only a candidate source* — Anki's FSRS state (§5)
+remains the source of truth for what's known, exactly as the original §4
+argued. So `build_lingq_candidates`:
+
+- **skips a looked-up word you already have a solid Anki card for** (no
+  duplicates — the same gradient-confidence check the whole pipeline uses);
+- **keeps a LingQ only if its fragment is genuine i+1**: the looked-up word
+  must be the sole unknown. If you looked up two words in one sentence, that
+  fragment is i+2 and waits in the backlog until each word turns up in a
+  cleaner single-unknown sentence — which is the pedagogically correct thing
+  to do, not a limitation;
+- **routes multi-word LingQs (phrases) to the collocation card type** (§7)
+  automatically.
+
+`locate_term` aligns the LingQ `term` to the spaCy-tokenized fragment,
+tolerating French elisions/apostrophes (matches on the whitespace-stripped
+concatenation but only at token boundaries, so `de` can't match inside
+`monde`), with a single-word lemma fallback when LingQ stored a base form.
+
+```bash
+# in .env: LINGQ_API_KEY (from https://www.lingq.com/accounts/apikey/),
+#          LINGQ_LANGUAGE_CODE=fr, plus ANTHROPIC_API_KEY
+.venv/bin/python scripts/mine_lingq_api.py            # dry run: show what would be mined
+.venv/bin/python scripts/mine_lingq_api.py --write 20  # generate + write + reorder
+```
+
+### Making it actually automatic
+
+"Auto-sync" means a **scheduled job on the machine where Anki runs** — this
+pipeline talks to Anki over `localhost:8765`, so it can't run in the cloud.
+Schedule the `--write` command however your OS does it, e.g. weekly:
+
+```cron
+# crontab -e  (macOS/Linux) — Sundays at 18:00, Anki must be open
+0 18 * * 0  cd /path/to/french-automining-pipeline && .venv/bin/python scripts/mine_lingq_api.py --write 20 >> lingq_sync.log 2>&1
+```
+
+(macOS launchd or Windows Task Scheduler work equally well.) Because the
+Anki dedup + i+1 filter + the daily-slot backlog cap all run every time,
+re-pulling the same LingQs is harmless — nothing gets double-carded, and a
+large backlog is a feature (§12): it gives Claude more to choose from.
+
+**Not verified against the real LingQ API in this session.** This sandbox
+has no LingQ key and restricted egress, so the client is built defensively
+against LingQ's documented v3 response shape and mocked in tests — the first
+real run on your machine is the true test. If LingQ's field names differ
+from what's coded (`term`, `fragment`, `status`, `hints[].text`), adjust
+`LingQCard`/`_extract_hint` in `french_mining/lingq/api.py`.
+
+`scripts/mine_lingq_pdf.py` and `scripts/mine_lingq_api.py` share their
+downstream write path (`french_mining.text_pipeline.write_ranked_candidates`)
+so the two text sources can't drift apart.
 
 ## API scoring layer (§6 Stage 2)
 
@@ -435,6 +503,7 @@ src/french_mining/
     collocation_note_type.py  # collocation note type, shares the single-word deck (§7)
   lingq/
     pdf_extract.py  # PDF -> raw text (pypdf)
+    api.py          # LingQ v3 API client + looked-up-word candidate builder
   youtube/
     transcripts.py  # yt-dlp subtitle download + WebVTT parsing
     media.py        # yt-dlp audio/video download + ffmpeg clip/frame-extract
@@ -446,6 +515,7 @@ src/french_mining/
   scoring.py                  # Claude/Sonnet API scoring + ranking (§6 Stage 2, shared)
   generation.py                # single-word card content + write path (§8 step 5)
   collocation_generation.py    # collocation card content + write path (§7)
+  text_pipeline.py             # shared score->generate->write path for PDF + LingQ-API sources
   images.py          # 3-tier image logic: source frame / Unsplash / none (§10)
   queue_ordering.py  # AnkiConnect `due` rewrites for the new-card queue (§2)
   hygiene.py         # monthly mature+high-frequency card suspension audit (§11)
@@ -457,6 +527,7 @@ scripts/
   create_placeholder_card.py              # verify the single-word card end-to-end
   create_placeholder_collocation_card.py  # verify the collocation card end-to-end
   mine_lingq_pdf.py           # run locally: full pipeline (words + collocations) on a real PDF
+  mine_lingq_api.py           # run locally (or scheduled): sync looked-up LingQs -> Anki
   mine_youtube_video.py       # run locally: full pipeline (words + collocations) on a real YouTube video
   monthly_hygiene_audit.py    # run locally (or on a schedule): flag/suspend mature cards
 tests/               # all AnkiConnect/Anthropic/yt-dlp calls mocked; ffmpeg tested for real
