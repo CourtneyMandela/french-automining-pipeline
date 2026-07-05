@@ -22,7 +22,7 @@ layer, the vocabulary state model, and the note type + write path.
 - [x] Local LingQ-PDF pipeline (spaCy extraction, i+1 pre-filter, §6 Stage 1)
 - [x] API scoring layer (Claude/Sonnet, §6 Stage 2)
 - [x] Card generation (morphology, second examples, translations, §8)
-- [ ] Queue ordering via AnkiConnect `due` rewrites
+- [x] Queue ordering via AnkiConnect `due` rewrites (§2)
 - [ ] YouTube pipeline (transcripts, audio clipping, frame extraction)
 - [ ] Image tier logic
 - [ ] Collocation card type
@@ -206,6 +206,34 @@ output without writing anything.
 Not exercised against the real Anthropic API in this session — covered by
 mocking `messages.create` in tests, same as the scoring layer.
 
+## Queue ordering (§2, build-order step 6)
+
+This is the mechanism behind the core architectural principle: FSRS owns a
+card the instant it's first reviewed, but until then it just sits in the
+new-card queue ordered by an integer `due` value — and that's the only lever
+Claude ever pulls. `french_mining.queue_ordering` never touches a card whose
+`type` isn't still `0` (new/unreviewed).
+
+`get_new_backlog_note_ids` reads every still-new note of our note type in
+the deck, in current queue order. `merge_priority_with_backlog` puts this
+run's freshly-ranked picks at the front and leaves every other still-new
+note in its existing relative order behind them — it deliberately does
+*not* re-score the whole historical backlog every run (that would burn API
+tokens re-judging cards already reasonably ranked last time, against the
+cost philosophy in §3). `reorder_queue` then rewrites `due` to consecutive
+integers across that merged order via AnkiConnect's
+`setSpecificValueOfCard`, skipping any note whose card already left the new
+state (FSRS owns it now, not us).
+
+**One-time setup this can't do for you:** Anki's new-card *display* order
+also has to be configured to actually respect `due` — in Deck Options ->
+Display Order, set the new-card gather/sort order to a position-based
+option, not "Random". Without that, rewriting `due` has no visible effect
+on what you see in Anki even though the values are correctly updated.
+
+`scripts/mine_lingq_pdf.py --write N` now reorders the queue automatically
+right after writing new cards.
+
 ## Project layout
 
 ```
@@ -220,6 +248,7 @@ src/french_mining/
   nlp.py             # spaCy loading + text -> ParsedSentence/Token
   scoring.py         # Claude/Sonnet API scoring + ranking (§6 Stage 2)
   generation.py      # Claude-generated card content + write path (§8 step 5)
+  queue_ordering.py  # AnkiConnect `due` rewrites for the new-card queue (§2)
   data/
     french_frequency_top500.csv
   frequency.py       # frequency floor + exclusion list loading

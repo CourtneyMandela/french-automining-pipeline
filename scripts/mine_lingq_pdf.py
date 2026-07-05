@@ -15,13 +15,18 @@ import argparse
 import os
 
 from french_mining.anki.connect import AnkiConnectClient
-from french_mining.anki.note_type import MODEL_NAME
+from french_mining.anki.note_type import DEFAULT_DECK_NAME, MODEL_NAME
 from french_mining.anki.vocab_state import VocabularyState
 from french_mining.frequency import FrequencyList
 from french_mining.generation import generate_and_write_cards
 from french_mining.lingq.candidates import find_i_plus_1_candidates, select_best_sentences
 from french_mining.lingq.pdf_extract import extract_text
 from french_mining.nlp import parse_text
+from french_mining.queue_ordering import (
+    get_new_backlog_note_ids,
+    merge_priority_with_backlog,
+    reorder_queue,
+)
 from french_mining.scoring import build_client, keep_and_rank, score_candidates
 
 
@@ -82,6 +87,14 @@ def main() -> None:
         print(f"\nGenerating and writing {len(to_write)} card(s) to Anki...")
         note_ids = generate_and_write_cards(anki_client, anthropic_client, to_write)
         print(f"Wrote note IDs: {note_ids}")
+
+        backlog_note_ids = get_new_backlog_note_ids(anki_client, MODEL_NAME, DEFAULT_DECK_NAME)
+        merged_order = merge_priority_with_backlog(note_ids, backlog_note_ids)
+        rewritten = reorder_queue(anki_client, merged_order)
+        print(
+            f"Reordered {len(rewritten)} still-new card(s) in the queue "
+            f"(today's {len(note_ids)} picks first, existing backlog behind them)."
+        )
 
 
 if __name__ == "__main__":
