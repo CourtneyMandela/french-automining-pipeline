@@ -9,6 +9,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "spacy>=3.7",
     "anthropic>=0.40",
+    "pypdf>=5.0",
+    "click>=8.1",  # spacy's `download` CLI needs this; some typer releases don't pull it in
 ]
 
 [project.optional-dependencies]
@@ -16,6 +18,7 @@ dev = [
     "pytest>=8.0",
     "pytest-mock>=3.14",
     "responses>=0.25",
+    "fpdf2>=2.8",
 ]
 
 [tool.setuptools.packages.find]

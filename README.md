@@ -19,7 +19,7 @@ layer, the vocabulary state model, and the note type + write path.
 - [x] Frequency floor for pre-Anki vocabulary (`french_mining.frequency`)
 - [x] Gradient vocabulary state model (`french_mining.anki.vocab_state`)
 - [x] Note type + template + write path (`french_mining.anki.note_type`, §8)
-- [ ] Local LingQ-PDF pipeline (spaCy extraction, i+1 pre-filter)
+- [x] Local LingQ-PDF pipeline (spaCy extraction, i+1 pre-filter, §6 Stage 1)
 - [ ] API scoring layer (Claude/Sonnet)
 - [ ] Card generation (morphology, second examples, translations)
 - [ ] Queue ordering via AnkiConnect `due` rewrites
@@ -102,6 +102,45 @@ front/back rendering directly in Anki. Audio fields (`WordAudio`,
 `SentenceAudio`, `SecondExampleAudio`) are optional for now since audio
 sourcing (§9) hasn't been built yet — cards will render silently until then.
 
+## Local LingQ-PDF pipeline (§6 Stage 1)
+
+`french_mining.lingq.pdf_extract` pulls raw text out of the weekly PDF drop
+(`extract_text`, `extract_text_from_folder`). `french_mining.nlp.parse_text`
+lemmatizes it with spaCy's French model into `ParsedSentence`/`Token`
+objects. `french_mining.lingq.candidates` then does the free, mechanical
+i+1 pre-filter (§6 Stage 1) that's supposed to remove ~90% of candidates
+before any API tokens are spent:
+
+- A sentence survives only if **exactly one** word's gradient confidence
+  (from `VocabularyState`) falls below `DEFAULT_KNOWN_THRESHOLD` (0.6) — one
+  true unknown, no fragile extras. Two weak words means i+2, not i+1, and
+  gets dropped.
+- Sentences outside a sane token-count band are dropped (too short to give
+  context, too long to be worth scoring).
+- `select_best_sentences` caps how many sentences per target word move on,
+  locally preferring sentence lengths close to `IDEAL_TOKEN_COUNT` — genuine
+  quality judgment (context transparency, recency, unlock potential) is
+  Stage 2's job (the API layer, not yet built).
+
+The i+1 filtering logic in `candidates.py` is deliberately spaCy-free (it
+operates on plain dataclasses) so it's fully unit-tested without the French
+model installed. `nlp.py` and `pdf_extract.py` are thin wrappers around
+spaCy/pypdf that do need real dependencies to run for real.
+
+**Note on this session:** the French spaCy model (`fr_core_news_sm`) is
+distributed via GitHub releases, which this sandboxed session's egress
+policy blocks — I couldn't download or exercise it here. On your machine:
+
+```bash
+.venv/bin/python -m spacy download fr_core_news_sm
+.venv/bin/python scripts/mine_lingq_pdf.py path/to/reading.pdf
+```
+
+That script runs the full local Stage 1 chain (PDF -> spaCy -> vocab state
+via AnkiConnect -> i+1 filter -> best-sentence selection) and prints the
+surviving candidates, so you can sanity-check it against a real reading
+before anything gets API-scored.
+
 ## Project layout
 
 ```
@@ -110,10 +149,15 @@ src/french_mining/
     connect.py      # AnkiConnect JSON-RPC client
     vocab_state.py  # gradient known-word model (§5)
     note_type.py    # note type, templates, write path (§8)
+  lingq/
+    pdf_extract.py  # PDF -> raw text (pypdf)
+    candidates.py   # i+1 pre-filter + best-sentence selection (§6 Stage 1)
+  nlp.py             # spaCy loading + text -> ParsedSentence/Token
   data/
     french_frequency_top500.csv
   frequency.py       # frequency floor + exclusion list loading
 scripts/
   create_placeholder_card.py  # run locally to verify one real card end-to-end
-tests/               # all AnkiConnect calls mocked, no live Anki needed
+  mine_lingq_pdf.py           # run locally: full Stage 1 chain on a real PDF
+tests/               # all AnkiConnect calls + spaCy model mocked/avoided
 ```
