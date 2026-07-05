@@ -40,6 +40,7 @@ class Candidate:
     other_lemmas: list[str]
     target_confidence: float
     source: str = ""
+    days_since_encountered: float | None = None
 
 
 def find_i_plus_1_candidates(

@@ -20,7 +20,7 @@ layer, the vocabulary state model, and the note type + write path.
 - [x] Gradient vocabulary state model (`french_mining.anki.vocab_state`)
 - [x] Note type + template + write path (`french_mining.anki.note_type`, §8)
 - [x] Local LingQ-PDF pipeline (spaCy extraction, i+1 pre-filter, §6 Stage 1)
-- [ ] API scoring layer (Claude/Sonnet)
+- [x] API scoring layer (Claude/Sonnet, §6 Stage 2)
 - [ ] Card generation (morphology, second examples, translations)
 - [ ] Queue ordering via AnkiConnect `due` rewrites
 - [ ] YouTube pipeline (transcripts, audio clipping, frame extraction)
@@ -141,6 +141,40 @@ via AnkiConnect -> i+1 filter -> best-sentence selection) and prints the
 surviving candidates, so you can sanity-check it against a real reading
 before anything gets API-scored.
 
+## API scoring layer (§6 Stage 2)
+
+`french_mining.scoring.score_candidates` sends Stage-1 survivors to Claude
+(Sonnet by default) in batches, via a forced tool call (`submit_candidate_scores`)
+so the response is structured, not free text. Each candidate comes back with:
+
+- `keep` — a qualitative override for cases the mechanical i+1 filter can't
+  catch (idioms that read as i+0/i+2 despite the word count, awkward
+  phrasing, ambiguous target words).
+- `i_plus_1_confirmed`, `unlock_potential`, `context_transparency` — the
+  quality dimensions from §6: the full backlog word list is included in the
+  prompt so the model can estimate how many other candidates a given word
+  would unlock.
+- `interference_risk` — a conflicting lemma from the active learning queue
+  (near-synonyms/confusable forms), or null. This *delays* a candidate via a
+  steep priority discount (`INTERFERENCE_PRIORITY_DISCOUNT`) rather than
+  dropping it — the spec is explicit that interference means "wait," not
+  "never."
+
+`_priority_score` combines frequency rank, unlock potential, context
+transparency, and recency (`Candidate.days_since_encountered`, currently
+unset by the LingQ pipeline since PDFs don't carry per-sentence timestamps —
+this becomes meaningful once the YouTube pipeline, with real watch dates,
+is built) into the composite score `keep_and_rank` sorts on. Actual queue
+reordering via AnkiConnect `due` rewrites is a separate later stage (§2, §6
+build-order step 6) — this module only scores and ranks.
+
+Requires `ANTHROPIC_API_KEY` in `.env`. `scripts/mine_lingq_pdf.py` runs
+Stage 2 automatically when the key is set, otherwise it just prints Stage 1
+survivors. I haven't been able to exercise this against the real API in this
+session (no key configured here) — the test suite covers it with the
+Anthropic client's `messages.create` mocked; real verification needs your
+own API key.
+
 ## Project layout
 
 ```
@@ -153,11 +187,12 @@ src/french_mining/
     pdf_extract.py  # PDF -> raw text (pypdf)
     candidates.py   # i+1 pre-filter + best-sentence selection (§6 Stage 1)
   nlp.py             # spaCy loading + text -> ParsedSentence/Token
+  scoring.py         # Claude/Sonnet API scoring + ranking (§6 Stage 2)
   data/
     french_frequency_top500.csv
   frequency.py       # frequency floor + exclusion list loading
 scripts/
   create_placeholder_card.py  # run locally to verify one real card end-to-end
-  mine_lingq_pdf.py           # run locally: full Stage 1 chain on a real PDF
-tests/               # all AnkiConnect calls + spaCy model mocked/avoided
+  mine_lingq_pdf.py           # run locally: full Stage 1 + Stage 2 chain on a real PDF
+tests/               # all AnkiConnect/Anthropic calls + spaCy model mocked/avoided
 ```
