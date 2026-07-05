@@ -43,6 +43,7 @@ def test_score_candidates_maps_results_back_by_index():
                 "unlock_potential": 3,
                 "context_transparency": True,
                 "interference_risk": None,
+                "is_concrete_and_visualizable": False,
                 "reasoning": "clear context",
             }
         ]
@@ -74,6 +75,7 @@ def test_score_candidates_batches_requests(monkeypatch):
                     "unlock_potential": 0,
                     "context_transparency": True,
                     "interference_risk": None,
+                "is_concrete_and_visualizable": False,
                     "reasoning": "ok",
                 }
                 for i in range(len(indices))
@@ -103,6 +105,7 @@ def test_interference_risk_heavily_discounts_priority():
                     "unlock_potential": 2,
                     "context_transparency": True,
                     "interference_risk": "remarquer",
+                    "is_concrete_and_visualizable": False,
                     "reasoning": "confusable with remarquer, in queue",
                 },
                 {
@@ -112,6 +115,7 @@ def test_interference_risk_heavily_discounts_priority():
                     "unlock_potential": 2,
                     "context_transparency": True,
                     "interference_risk": None,
+                "is_concrete_and_visualizable": False,
                     "reasoning": "no conflict",
                 },
             ]
@@ -139,6 +143,7 @@ def test_keep_and_rank_drops_rejected_and_sorts_best_first():
                 "unlock_potential": 0,
                 "context_transparency": False,
                 "interference_risk": None,
+                "is_concrete_and_visualizable": False,
                 "reasoning": "idiomatic, actually i+0",
             },
             {
@@ -148,6 +153,7 @@ def test_keep_and_rank_drops_rejected_and_sorts_best_first():
                 "unlock_potential": 5,
                 "context_transparency": True,
                 "interference_risk": None,
+                "is_concrete_and_visualizable": False,
                 "reasoning": "great candidate",
             },
         ]

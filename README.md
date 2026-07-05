@@ -24,7 +24,7 @@ layer, the vocabulary state model, and the note type + write path.
 - [x] Card generation (morphology, second examples, translations, §8)
 - [x] Queue ordering via AnkiConnect `due` rewrites (§2)
 - [x] YouTube pipeline (transcripts, audio clipping, frame extraction)
-- [ ] Image tier logic (talking-head filter, Unsplash fallback)
+- [x] Image tier logic (talking-head filter, Unsplash fallback, §10)
 - [ ] Collocation card type
 - [ ] Monthly hygiene audit
 
@@ -272,14 +272,11 @@ and now two pipelines share it).
   takes a video ID directly rather than trying to surface history
   automatically.
 - `youtube/pipeline.py` — `attach_source_media` clips the real sentence
-  audio (and, with `--with-images`, grabs a raw source frame at the
-  sentence's midpoint) and stores both via AnkiConnect's `storeMediaFile`
-  (`connect.store_media_file`), returning `[sound:...]`/`<img>` field
-  overrides for `generation.py`'s field dict.
-
-**Talking-head filtering and the Unsplash fallback (§10) are not built
-yet** — that's build-order step 8. This step only grabs the raw frame;
-whether it's any good is step 8's job.
+  audio and stores it via AnkiConnect's `storeMediaFile`
+  (`connect.store_media_file`), returning a `SentenceAudio` field override.
+  `grab_source_frame` extracts the raw video frame at the sentence's
+  midpoint (with `--with-images`) for the image tier logic below to judge —
+  this module doesn't decide whether a frame is any good.
 
 `scripts/mine_youtube_video.py VIDEO_ID --write N [--with-images]` runs the
 full chain: metadata -> subtitles -> spaCy+timing -> i+1 filter -> Stage 2
@@ -296,6 +293,46 @@ install ffmpeg` after fixing a mirror dependency snag got it working), so
 `clip_audio`/`extract_frame` are tested against real ffmpeg output, not
 just mocks — only the yt-dlp download and Data API calls are mocked. Run
 this on your own machine, where none of that is blocked.
+
+## Image tier logic (§10, build-order step 8)
+
+`french_mining.images` implements the full 3-tier decision from §10, gated
+by a concreteness judgment that piggybacks on Stage 2 scoring rather than
+spending a separate API call:
+`ScoredCandidate.is_concrete_and_visualizable` — abstract words, most
+verbs/adjectives, and generic nouns never get an image, since an irrelevant
+image actively hurts retention (Mayer's coherence principle).
+
+1. **Source frame** (YouTube only) — `is_talking_head_or_text` is a free,
+   local OpenCV pre-filter: a Haar-cascade face detector discards frames
+   where a face fills too much of the frame (talking-head shots), and a
+   Canny edge-density heuristic discards text-heavy frames (slides,
+   burned-in captions). Only frames that pass both go to
+   `check_image_relevance`, a cheap Claude vision call judging whether the
+   frame actually, distinctively shows the target word's referent.
+2. **Unsplash fallback** — `search_unsplash` queries by the target lemma;
+   `pick_best_unsplash_photo` sends the handful of results to Claude in one
+   vision call asking it to prefer culturally specific imagery over generic
+   stock-photo-style results (or reject all of them), per §10.
+3. **No image** — abstract words (gated before tier 1 even runs), and
+   anything that failed both tiers above.
+
+`resolve_image_field` runs all three tiers and returns the `Image` field
+value directly. Both `mine_lingq_pdf.py` (Unsplash-only — PDFs have no
+video frame) and `mine_youtube_video.py --with-images` (full 3-tier) call
+it after card generation, since it needs the generated `TargetWordGloss`.
+
+The OpenCV pre-filter is genuinely tested here against real images (a
+smooth gradient vs. a synthetic checkerboard, generated locally with
+numpy/cv2 — no network needed) — `EDGE_DENSITY_TEXT_THRESHOLD` was
+empirically calibrated against those two cases, not against a real
+burned-in-caption frame, so treat it as a reasonable starting point to
+retune once you've seen it run on real video frames. One dependency note:
+`opencv-python-headless` is pinned below 5.0 in `pyproject.toml` because
+that release stopped bundling the Haar cascade XML files this pre-filter
+needs (`cv2/data/*.xml` was empty in 5.0.0 when I checked). The vision
+check and Unsplash calls themselves are mocked in tests, same as the rest
+of the Anthropic API surface.
 
 ## Project layout
 
@@ -316,6 +353,7 @@ src/french_mining/
   nlp.py             # spaCy loading + text/transcript -> ParsedSentence/Token
   scoring.py         # Claude/Sonnet API scoring + ranking (§6 Stage 2)
   generation.py      # Claude-generated card content + write path (§8 step 5)
+  images.py          # 3-tier image logic: source frame / Unsplash / none (§10)
   queue_ordering.py  # AnkiConnect `due` rewrites for the new-card queue (§2)
   data/
     french_frequency_top500.csv

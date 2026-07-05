@@ -28,6 +28,7 @@ def make_scored(lemma: str, form: str, sentence: str, frequency_rank=None) -> Sc
         unlock_potential=2,
         context_transparency=True,
         interference_risk=None,
+        is_concrete_and_visualizable=False,
         reasoning="good candidate",
         priority_score=1.5,
     )

@@ -15,10 +15,11 @@ import argparse
 import os
 
 from french_mining.anki.connect import AnkiConnectClient
-from french_mining.anki.note_type import DEFAULT_DECK_NAME, MODEL_NAME
+from french_mining.anki.note_type import DEFAULT_DECK_NAME, MODEL_NAME, add_card
 from french_mining.anki.vocab_state import VocabularyState
 from french_mining.frequency import FrequencyList
-from french_mining.generation import generate_and_write_cards
+from french_mining.generation import generate_card_content
+from french_mining.images import resolve_image_field
 from french_mining.candidates import find_i_plus_1_candidates, select_best_sentences
 from french_mining.lingq.pdf_extract import extract_text
 from french_mining.nlp import parse_text
@@ -84,8 +85,22 @@ def main() -> None:
 
     if args.write > 0:
         to_write = ranked[: args.write]
-        print(f"\nGenerating and writing {len(to_write)} card(s) to Anki...")
-        note_ids = generate_and_write_cards(anki_client, anthropic_client, to_write)
+        print(f"\nGenerating content and resolving images for {len(to_write)} card(s)...")
+        field_sets = generate_card_content(anthropic_client, to_write)
+        note_ids = []
+        for fields, scored_candidate in zip(field_sets, to_write):
+            # LingQ PDFs have no video frame, so this only ever reaches the
+            # Unsplash tier (or no image, for abstract words) — §10 tier 1
+            # (source frame) is YouTube-only.
+            fields["Image"] = resolve_image_field(
+                anki_client,
+                anthropic_client,
+                scored_candidate,
+                fields["TargetWordGloss"],
+                frame_path=None,
+                work_dir="lingq_work/images",
+            )
+            note_ids.append(add_card(anki_client, fields))
         print(f"Wrote note IDs: {note_ids}")
 
         backlog_note_ids = get_new_backlog_note_ids(anki_client, MODEL_NAME, DEFAULT_DECK_NAME)

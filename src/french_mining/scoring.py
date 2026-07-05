@@ -12,6 +12,9 @@ Scores each candidate on:
   - recency (recent content carries live episodic memory)
   - interference risk (semantic proximity to words already in the learning
     queue — near-synonyms/confusable forms should be delayed, not discarded)
+  - concreteness (§10: only concrete, culturally specific nouns are worth
+    ever attempting an image for — this piggybacks on the existing scoring
+    call rather than spending a separate API call on it)
 """
 from __future__ import annotations
 
@@ -63,6 +66,10 @@ SCORING_TOOL = {
                             "type": ["string", "null"],
                             "description": "Lemma of a near-synonym/confusable word already in the active learning queue this would interfere with, or null.",
                         },
+                        "is_concrete_and_visualizable": {
+                            "type": "boolean",
+                            "description": "True only for concrete, culturally specific nouns a photo could meaningfully depict (e.g. 'boulangerie', 'baguette'). False for abstract words, most verbs/adjectives, and generic nouns with no distinctive visual referent.",
+                        },
                         "reasoning": {"type": "string"},
                     },
                     "required": [
@@ -72,6 +79,7 @@ SCORING_TOOL = {
                         "unlock_potential",
                         "context_transparency",
                         "interference_risk",
+                        "is_concrete_and_visualizable",
                         "reasoning",
                     ],
                 },
@@ -101,6 +109,12 @@ job is qualitative judgment the local filter cannot make:
    learning queue for near-synonyms or easily-confused forms (e.g.
    apercevoir / remarquer / constater). Flag it, don't just reject it —
    delay, not discard.
+6. Concreteness: is the target word a concrete, culturally specific noun a
+   photo could meaningfully depict (e.g. "boulangerie", "baguette"), as
+   opposed to an abstract word, most verbs/adjectives, or a generic noun
+   with no distinctive visual referent? Be conservative — irrelevant images
+   actively hurt retention, so only mark this true when a photo would
+   genuinely help, not for every physical-object noun.
 
 Do not shade i+1 toward i+0 by picking only the most obvious, context-giveaway
 sentences — slight productive struggle before retrieval is the point.
@@ -116,6 +130,7 @@ class ScoredCandidate:
     unlock_potential: int
     context_transparency: bool
     interference_risk: str | None
+    is_concrete_and_visualizable: bool
     reasoning: str
     priority_score: float
 
@@ -237,6 +252,7 @@ def score_candidates(
                     unlock_potential=entry["unlock_potential"],
                     context_transparency=entry["context_transparency"],
                     interference_risk=entry["interference_risk"],
+                    is_concrete_and_visualizable=entry["is_concrete_and_visualizable"],
                     reasoning=entry["reasoning"],
                     priority_score=priority_score,
                 )

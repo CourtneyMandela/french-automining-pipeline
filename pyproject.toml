@@ -12,6 +12,9 @@ dependencies = [
     "pypdf>=5.0",
     "click>=8.1",  # spacy's `download` CLI needs this; some typer releases don't pull it in
     "yt-dlp>=2024.1",
+    # Pinned below 5.0: that release dropped the bundled Haar cascade XML
+    # files (cv2/data/*.xml) that the talking-head pre-filter needs.
+    "opencv-python-headless>=4.8,<5",
 ]
 
 [project.optional-dependencies]

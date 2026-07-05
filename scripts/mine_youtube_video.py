@@ -22,6 +22,7 @@ from french_mining.anki.vocab_state import VocabularyState
 from french_mining.candidates import find_i_plus_1_candidates, select_best_sentences
 from french_mining.frequency import FrequencyList
 from french_mining.generation import generate_card_content
+from french_mining.images import resolve_image_field
 from french_mining.nlp import parse_transcript
 from french_mining.queue_ordering import (
     get_new_backlog_note_ids,
@@ -31,7 +32,7 @@ from french_mining.queue_ordering import (
 from french_mining.scoring import build_client, keep_and_rank, score_candidates
 from french_mining.youtube.media import download_audio, download_video
 from french_mining.youtube.metadata import fetch_video_metadata, format_source
-from french_mining.youtube.pipeline import attach_source_media
+from french_mining.youtube.pipeline import attach_source_media, grab_source_frame
 from french_mining.youtube.transcripts import download_subtitles, load_transcript
 
 
@@ -112,14 +113,26 @@ def main() -> None:
     audio_path = download_audio(args.video_id, work_dir)
     video_path = download_video(args.video_id, work_dir) if args.with_images else None
 
-    print(f"Generating content and attaching source media for {len(to_write)} card(s)...")
+    print(f"Generating content, source audio, and images for {len(to_write)} card(s)...")
     field_sets = generate_card_content(anthropic_client, to_write)
     note_ids = []
     for fields, scored_candidate in zip(field_sets, to_write):
-        media_fields = attach_source_media(
-            anki_client, scored_candidate, audio_path, video_path, work_dir / "clips"
-        )
+        media_fields = attach_source_media(anki_client, scored_candidate, audio_path, work_dir / "clips")
         fields.update({k: v for k, v in media_fields.items() if v})
+
+        frame_path = (
+            grab_source_frame(scored_candidate, video_path, work_dir / "frames")
+            if video_path is not None
+            else None
+        )
+        fields["Image"] = resolve_image_field(
+            anki_client,
+            anthropic_client,
+            scored_candidate,
+            fields["TargetWordGloss"],
+            frame_path,
+            work_dir / "images",
+        )
         note_ids.append(add_card(anki_client, fields))
 
     print(f"Wrote note IDs: {note_ids}")
