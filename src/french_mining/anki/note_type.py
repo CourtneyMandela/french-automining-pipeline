@@ -13,6 +13,10 @@ written here — highlighting is a card-generation concern, not this module's.
 from __future__ import annotations
 
 from french_mining.anki.connect import AnkiConnectClient
+from french_mining.anki.note_common import NoteTypeSpec
+from french_mining.anki.note_common import add_card as _add_card
+from french_mining.anki.note_common import build_note as _build_note
+from french_mining.anki.note_common import ensure_model as _ensure_model
 
 MODEL_NAME = "French Sentence Mining"
 DEFAULT_DECK_NAME = "French::Mining"
@@ -93,24 +97,23 @@ BACK_TEMPLATE = """
 """.strip()
 
 
+SPEC = NoteTypeSpec(
+    model_name=MODEL_NAME,
+    field_names=FIELD_NAMES,
+    optional_fields=OPTIONAL_FIELDS,
+    front_template=FRONT_TEMPLATE,
+    back_template=BACK_TEMPLATE,
+    css=CSS,
+    deck_name=DEFAULT_DECK_NAME,
+)
+
+
 def ensure_model(client: AnkiConnectClient) -> bool:
     """Create the note type in Anki if it doesn't already exist.
 
     Returns True if the model was created, False if it already existed.
-    AnkiConnect's `createModel` has no "already exists" idempotent mode, so
-    we check `modelNames` first.
     """
-    if MODEL_NAME in client.model_names():
-        return False
-    client.create_model(
-        model_name=MODEL_NAME,
-        in_order_fields=FIELD_NAMES,
-        card_templates=[
-            {"Name": "Card 1", "Front": FRONT_TEMPLATE, "Back": BACK_TEMPLATE}
-        ],
-        css=CSS,
-    )
-    return True
+    return _ensure_model(client, SPEC)
 
 
 def build_note(fields: dict[str, str], deck_name: str = DEFAULT_DECK_NAME) -> dict:
@@ -118,29 +121,12 @@ def build_note(fields: dict[str, str], deck_name: str = DEFAULT_DECK_NAME) -> di
 
     Raises ValueError if a required (non-optional) field is missing.
     """
-    missing_required = [
-        name for name in FIELD_NAMES if name not in OPTIONAL_FIELDS and not fields.get(name)
-    ]
-    if missing_required:
-        raise ValueError(f"Missing required field(s): {', '.join(missing_required)}")
-
-    note_fields = {name: fields.get(name, "") for name in FIELD_NAMES}
-    return {
-        "deckName": deck_name,
-        "modelName": MODEL_NAME,
-        "fields": note_fields,
-        "options": {"allowDuplicate": False},
-        "tags": ["french-mining-pipeline"],
-    }
+    return _build_note(fields, SPEC, deck_name=deck_name)
 
 
 def add_card(client: AnkiConnectClient, fields: dict[str, str], deck_name: str = DEFAULT_DECK_NAME) -> int:
     """Create the deck (if needed) and the note type (if needed), then add one card."""
-    if deck_name not in client.deck_names():
-        client.invoke("createDeck", deck=deck_name)
-    ensure_model(client)
-    note = build_note(fields, deck_name=deck_name)
-    return client.add_note(note)
+    return _add_card(client, fields, SPEC, deck_name=deck_name)
 
 
 def placeholder_fields() -> dict[str, str]:

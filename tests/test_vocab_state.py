@@ -159,3 +159,80 @@ def test_fallback_heuristic_used_when_memory_state_absent():
     client = make_client(notes, cards)
     state = VocabularyState.build(client, model_names=["FrenchSentence"], now_epoch=now)
     assert state.confidence("parler") == 1.0
+
+
+def make_multi_model_client(notes_by_model: dict[str, list[dict]], cards_by_model: dict[str, list[dict]]) -> MagicMock:
+    """Distinguishes queries by model name -- needed once a single build()
+    call scans both the single-word and collocation note types.
+    """
+    client = MagicMock()
+
+    def find_notes(query: str):
+        for model_name, notes in notes_by_model.items():
+            if f'note:"{model_name}"' in query:
+                return [n["noteId"] for n in notes]
+        return []
+
+    def notes_info(note_ids):
+        for notes in notes_by_model.values():
+            if note_ids and note_ids[0] in [n["noteId"] for n in notes]:
+                return notes
+        return []
+
+    def cards_info(card_ids):
+        for cards in cards_by_model.values():
+            if card_ids and card_ids[0] in [c["cardId"] for c in cards]:
+                return cards
+        return []
+
+    client.find_notes.side_effect = find_notes
+    client.notes_info.side_effect = notes_info
+    client.cards_info.side_effect = cards_info
+    return client
+
+
+def test_known_chunks_are_tracked_separately_from_known_words():
+    now = time.time()
+    word_notes = [
+        {"noteId": 1, "fields": {"TargetWord": {"value": "chat", "order": 0}}, "cards": [101]}
+    ]
+    word_cards = [
+        {"cardId": 101, "type": 2, "lapses": 0, "mod": now, "interval": 60, "memoryState": {"stability": 60}}
+    ]
+    chunk_notes = [
+        {
+            "noteId": 2,
+            "fields": {"TargetChunk": {"value": "s'apercevoir de", "order": 0}},
+            "cards": [201],
+        }
+    ]
+    chunk_cards = [
+        {"cardId": 201, "type": 2, "lapses": 0, "mod": now, "interval": 60, "memoryState": {"stability": 60}}
+    ]
+    client = make_multi_model_client(
+        notes_by_model={"FrenchSentence": word_notes, "FrenchCollocation": chunk_notes},
+        cards_by_model={"FrenchSentence": word_cards, "FrenchCollocation": chunk_cards},
+    )
+
+    state = VocabularyState.build(
+        client,
+        model_names=["FrenchSentence"],
+        collocation_model_names=["FrenchCollocation"],
+        now_epoch=now,
+    )
+
+    assert state.is_known("chat")
+    assert state.is_chunk_known("s'apercevoir de")
+    # A chunk isn't a single word and vice versa -- no cross-namespace leakage.
+    assert not state.is_known("s'apercevoir de")
+    assert not state.is_chunk_known("chat")
+
+
+def test_chunk_confidence_has_no_frequency_floor_fallback():
+    client = make_client(notes=[], cards=[])
+    state = VocabularyState.build(client, model_names=["FrenchSentence"])
+    # "de" alone is top-frequency for single words, but an unmatched chunk
+    # (no collocation note types were even queried here) is just unknown --
+    # chunks don't get the pre-Anki frequency-floor assumption.
+    assert state.chunk_confidence("s'apercevoir de") == 0.0
+    assert not state.is_chunk_known("s'apercevoir de")

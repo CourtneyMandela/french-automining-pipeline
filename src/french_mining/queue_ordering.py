@@ -19,11 +19,15 @@ from french_mining.anki.connect import AnkiConnectClient
 NEW_CARD_TYPE = 0  # Anki card `type`: 0 = new, never reviewed.
 
 
-def get_new_backlog_note_ids(client: AnkiConnectClient, model_name: str, deck_name: str) -> list[int]:
-    """All still-new notes of our note type in the deck, in their current
-    queue order (ascending `due`).
+def get_new_backlog_note_ids(client: AnkiConnectClient, model_names: list[str], deck_name: str) -> list[int]:
+    """All still-new notes of the given note type(s) in the deck, in their
+    current queue order (ascending `due`).
+
+    Accepts multiple note types so single words and collocations (§7: they
+    "share the same backlog") can be reordered together in one pass.
     """
-    card_ids = client.find_cards(f'deck:"{deck_name}" note:"{model_name}" is:new')
+    note_filter = " or ".join(f'note:"{model_name}"' for model_name in model_names)
+    card_ids = client.find_cards(f'deck:"{deck_name}" ({note_filter}) is:new')
     cards = client.cards_info(card_ids)
     cards.sort(key=lambda c: c.get("due", 0))
     return [c["note"] for c in cards]

@@ -99,6 +99,43 @@ def _confidence_from_card(card: dict, now_epoch: float) -> WordKnowledge:
     )
 
 
+def _scan_notes(
+    client: AnkiConnectClient, model_names: list[str], tested_field: str, now_epoch: float
+) -> dict[str, WordKnowledge]:
+    """Read every note of the given note type(s) via AnkiConnect and build a
+    lemma/chunk -> best-confidence-card map from their tested field and card
+    review state. Shared by both the single-word and collocation known-sets.
+    """
+    known: dict[str, WordKnowledge] = {}
+    for model_name in model_names:
+        note_ids = client.find_notes(f'note:"{model_name}"')
+        notes = client.notes_info(note_ids)
+
+        card_ids: list[int] = []
+        card_id_to_key: dict[int, str] = {}
+        for note in notes:
+            field = note.get("fields", {}).get(tested_field)
+            if not field:
+                continue
+            key = field["value"].strip().lower()
+            if not key:
+                continue
+            for card_id in note.get("cards", []):
+                card_ids.append(card_id)
+                card_id_to_key[card_id] = key
+
+        cards = client.cards_info(card_ids)
+        for card in cards:
+            key = card_id_to_key[card["cardId"]]
+            knowledge = _confidence_from_card(card, now_epoch)
+            knowledge.lemma = key
+            existing = known.get(key)
+            if existing is None or knowledge.confidence > existing.confidence:
+                known[key] = knowledge
+
+    return known
+
+
 class VocabularyState:
     """Gradient-weighted French vocabulary state, backed by Anki + a frequency floor."""
 
@@ -108,11 +145,13 @@ class VocabularyState:
         frequency_list: FrequencyList | None = None,
         exclusion_list: frozenset[str] = frozenset(),
         frequency_floor: int = 500,
+        known_chunks: dict[str, WordKnowledge] | None = None,
     ):
         self.known_words = known_words
         self.frequency_list = frequency_list
         self.exclusion_list = exclusion_list
         self.frequency_floor = frequency_floor
+        self.known_chunks = known_chunks or {}
 
     def confidence(self, lemma: str) -> float:
         lemma = lemma.strip().lower()
@@ -128,6 +167,17 @@ class VocabularyState:
     def is_known(self, lemma: str, threshold: float = 0.6) -> bool:
         return self.confidence(lemma) >= threshold
 
+    def chunk_confidence(self, chunk: str) -> float:
+        """Same gradient model as `confidence`, but for collocations (§7) —
+        no frequency floor, since chunks aren't simple frequency-ranked
+        words; an untested chunk is just unknown.
+        """
+        knowledge = self.known_chunks.get(chunk.strip().lower())
+        return knowledge.confidence if knowledge is not None else 0.0
+
+    def is_chunk_known(self, chunk: str, threshold: float = 0.6) -> bool:
+        return self.chunk_confidence(chunk) >= threshold
+
     @classmethod
     def build(
         cls,
@@ -138,46 +188,33 @@ class VocabularyState:
         exclusion_list_path: str | None = None,
         frequency_floor: int = 500,
         now_epoch: float | None = None,
+        collocation_model_names: list[str] | None = None,
+        collocation_tested_field: str = "TargetChunk",
     ) -> "VocabularyState":
         """Build vocabulary state by reading note + card state via AnkiConnect.
 
         `model_names` are the Anki note types whose `tested_field` holds the
-        lemma being learned (e.g. the single-word and collocation note types).
+        lemma being learned (the single-word note type). Pass
+        `collocation_model_names` (the collocation note type) to also track
+        known collocations (§7) — they're kept in a separate namespace
+        (`known_chunks`) since a chunk's text can coincide with an unrelated
+        single word.
         """
         import time
 
         now_epoch = now_epoch if now_epoch is not None else time.time()
 
-        known_words: dict[str, WordKnowledge] = {}
-        for model_name in model_names:
-            note_ids = client.find_notes(f'note:"{model_name}"')
-            notes = client.notes_info(note_ids)
-
-            card_ids: list[int] = []
-            card_id_to_lemma: dict[int, str] = {}
-            for note in notes:
-                field = note.get("fields", {}).get(tested_field)
-                if not field:
-                    continue
-                lemma = field["value"].strip().lower()
-                if not lemma:
-                    continue
-                for card_id in note.get("cards", []):
-                    card_ids.append(card_id)
-                    card_id_to_lemma[card_id] = lemma
-
-            cards = client.cards_info(card_ids)
-            for card in cards:
-                lemma = card_id_to_lemma[card["cardId"]]
-                knowledge = _confidence_from_card(card, now_epoch)
-                knowledge.lemma = lemma
-                existing = known_words.get(lemma)
-                if existing is None or knowledge.confidence > existing.confidence:
-                    known_words[lemma] = knowledge
+        known_words = _scan_notes(client, model_names, tested_field, now_epoch)
+        known_chunks = (
+            _scan_notes(client, collocation_model_names, collocation_tested_field, now_epoch)
+            if collocation_model_names
+            else {}
+        )
 
         return cls(
             known_words=known_words,
             frequency_list=frequency_list or FrequencyList.load(),
             exclusion_list=load_exclusion_list(exclusion_list_path),
             frequency_floor=frequency_floor,
+            known_chunks=known_chunks,
         )

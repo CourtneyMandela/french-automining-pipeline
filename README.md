@@ -25,7 +25,7 @@ layer, the vocabulary state model, and the note type + write path.
 - [x] Queue ordering via AnkiConnect `due` rewrites (§2)
 - [x] YouTube pipeline (transcripts, audio clipping, frame extraction)
 - [x] Image tier logic (talking-head filter, Unsplash fallback, §10)
-- [ ] Collocation card type
+- [x] Collocation card type (§7)
 - [ ] Monthly hygiene audit
 
 ## Important: this must run on the same machine as Anki
@@ -334,14 +334,72 @@ needs (`cv2/data/*.xml` was empty in 5.0.0 when I checked). The vision
 check and Unsplash calls themselves are mocked in tests, same as the rest
 of the Anthropic API surface.
 
+## Collocation card type (§7, build-order step 9)
+
+Fluency is largely chunk-level, not word-level. Single words and
+collocations are mined by different criteria (§6 vs. §7) but explicitly
+**share the same backlog and compete for the same daily slots** — so
+rather than forking the pipeline, a collocation candidate is just a
+`Candidate` with `is_collocation=True` and `target_lemma` set to the
+chunk's canonical form. It flows through the exact same Stage 2 scoring,
+`select_best_sentences`, and queue-ordering code as single words; only
+local extraction, card generation, and the note type are collocation-
+specific.
+
+- `french_mining.collocations` — `find_collocation_candidates` matches a
+  curated seed list (`data/french_collocations.csv`: ~40 common verb-
+  preposition pairings and fixed expressions, e.g. `s'apercevoir de` /
+  "to realize" vs. transitive `apercevoir` / "to catch sight of") against
+  sentence lemma sequences. Matching allows a small gap between components
+  (`MAX_COMPONENT_GAP`, default 4 tokens) since French inserts reflexive
+  pronouns, negation, and clitics between a verb and its preposition — an
+  exact contiguous match would miss most real occurrences. The same i+1
+  gating idea applies: a sentence qualifies only if the matched chunk is
+  the sole unknown/fragile unit and every other word is already known.
+- `VocabularyState.known_chunks` / `chunk_confidence` / `is_chunk_known` —
+  collocations already mastered are tracked in a separate namespace from
+  single words (added via `VocabularyState.build(..., collocation_model_names=[...])`),
+  so a chunk's text never collides with an unrelated single word, and (unlike
+  single words) chunks get no frequency-floor fallback — an untested chunk
+  is just unknown.
+- `french_mining.anki.collocation_note_type` — a second note type
+  ("French Collocation Mining") sharing the single-word note type's field
+  order and template structure (`note_common.py` now holds the mechanics
+  both note types share), but keyed on `TargetChunk` instead of
+  `TargetWord`, with a `UsageNote` field replacing `MorphologyNote` — this
+  is the card's most important field, since it's expected to explain why
+  the chunk is worth learning as a unit rather than as its component words.
+  It shares the single-word note type's deck, per §7.
+- `french_mining.collocation_generation` — mirrors `generation.py` for the
+  collocation fields; its system prompt explicitly asks for that
+  component-word contrast in `UsageNote`.
+
+Both mining scripts now extract word and collocation candidates side by
+side, merge them before Stage 2 scoring/ranking (one shared, ranked list),
+then split back out by `is_collocation` only at generation/write time
+(different note types need different generated fields) before reordering
+the queue across both note types together
+(`get_new_backlog_note_ids`/`reorder_queue` now accept multiple note types).
+
+`scripts/create_placeholder_collocation_card.py` verifies the collocation
+template end-to-end, same as `create_placeholder_card.py` does for single
+words.
+
+The seed collocation list is a starting point (~40 entries), not
+exhaustive — same caveat as the frequency list: swap in a bigger one via
+`load_collocations("path/to/your.csv")` (same `chunk,lemmas,gloss` format)
+as you find gaps.
+
 ## Project layout
 
 ```
 src/french_mining/
   anki/
-    connect.py      # AnkiConnect JSON-RPC client + storeMediaFile
-    vocab_state.py  # gradient known-word model (§5)
-    note_type.py    # note type, templates, write path (§8)
+    connect.py               # AnkiConnect JSON-RPC client + storeMediaFile
+    vocab_state.py           # gradient known-word/known-chunk model (§5)
+    note_common.py           # shared note-type mechanics (createModel/addNote)
+    note_type.py              # single-word note type, templates, write path (§8)
+    collocation_note_type.py  # collocation note type, shares the single-word deck (§7)
   lingq/
     pdf_extract.py  # PDF -> raw text (pypdf)
   youtube/
@@ -349,18 +407,22 @@ src/french_mining/
     media.py        # yt-dlp audio/video download + ffmpeg clip/frame-extract
     metadata.py     # YouTube Data API video metadata
     pipeline.py      # attach_source_media: clip + store audio/frame per card
-  candidates.py      # i+1 pre-filter + best-sentence selection (§6 Stage 1, shared)
-  nlp.py             # spaCy loading + text/transcript -> ParsedSentence/Token
-  scoring.py         # Claude/Sonnet API scoring + ranking (§6 Stage 2)
-  generation.py      # Claude-generated card content + write path (§8 step 5)
+  candidates.py             # i+1 pre-filter + best-sentence selection (§6 Stage 1, shared)
+  collocations.py            # collocation matcher -> generic Candidate (§7)
+  nlp.py                     # spaCy loading + text/transcript -> ParsedSentence/Token
+  scoring.py                  # Claude/Sonnet API scoring + ranking (§6 Stage 2, shared)
+  generation.py                # single-word card content + write path (§8 step 5)
+  collocation_generation.py    # collocation card content + write path (§7)
   images.py          # 3-tier image logic: source frame / Unsplash / none (§10)
   queue_ordering.py  # AnkiConnect `due` rewrites for the new-card queue (§2)
   data/
     french_frequency_top500.csv
+    french_collocations.csv
   frequency.py       # frequency floor + exclusion list loading
 scripts/
-  create_placeholder_card.py  # run locally to verify one real card end-to-end
-  mine_lingq_pdf.py           # run locally: full pipeline on a real PDF
-  mine_youtube_video.py       # run locally: full pipeline on a real YouTube video
+  create_placeholder_card.py              # verify the single-word card end-to-end
+  create_placeholder_collocation_card.py  # verify the collocation card end-to-end
+  mine_lingq_pdf.py           # run locally: full pipeline (words + collocations) on a real PDF
+  mine_youtube_video.py       # run locally: full pipeline (words + collocations) on a real YouTube video
 tests/               # all AnkiConnect/Anthropic/yt-dlp calls mocked; ffmpeg tested for real
 ```

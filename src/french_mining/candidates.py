@@ -48,6 +48,11 @@ class Candidate:
     # Which video this came from, so downstream media steps know which
     # downloaded audio/video file to clip from when a run covers several.
     video_id: str | None = None
+    # True for multi-word collocations (§7): target_lemma is the chunk's
+    # canonical form, not a single lemma. Single words and collocations
+    # otherwise share this same Candidate/scoring/queue-ordering pipeline,
+    # since they compete for the same backlog slots.
+    is_collocation: bool = False
 
 
 def find_i_plus_1_candidates(

@@ -16,12 +16,24 @@ def test_get_new_backlog_note_ids_queries_and_sorts_by_due():
         {"cardId": 103, "note": 3, "due": 3},
     ]
 
-    result = get_new_backlog_note_ids(client, "French Sentence Mining", "French::Mining")
+    result = get_new_backlog_note_ids(client, ["French Sentence Mining"], "French::Mining")
 
     client.find_cards.assert_called_once_with(
-        'deck:"French::Mining" note:"French Sentence Mining" is:new'
+        'deck:"French::Mining" (note:"French Sentence Mining") is:new'
     )
     assert result == [2, 3, 1]  # ordered by ascending due
+
+
+def test_get_new_backlog_note_ids_queries_multiple_note_types_together():
+    client = MagicMock()
+    client.find_cards.return_value = [101]
+    client.cards_info.return_value = [{"cardId": 101, "note": 1, "due": 0}]
+
+    get_new_backlog_note_ids(client, ["French Sentence Mining", "French Collocation Mining"], "French::Mining")
+
+    client.find_cards.assert_called_once_with(
+        'deck:"French::Mining" (note:"French Sentence Mining" or note:"French Collocation Mining") is:new'
+    )
 
 
 def test_merge_priority_with_backlog_dedups_and_preserves_backlog_order():

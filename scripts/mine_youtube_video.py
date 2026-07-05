@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Mine one YouTube video for i+1 sentence-mining candidates: transcript ->
-spaCy -> vocab state -> i+1 filter -> (optionally) Stage 2 scoring, card
-generation, source audio/frame attachment, writing, and queue reordering.
+"""Mine one YouTube video for i+1 sentence-mining candidates -- both single
+words and collocations (§7) -- transcript -> spaCy -> vocab state -> i+1
+filter -> (optionally) Stage 2 scoring, card generation, source audio/frame
+attachment, writing, and queue reordering.
 
 Requires (on your own machine, not this sandboxed session — see README):
   - the French spaCy model (GitHub releases are blocked here)
@@ -16,10 +17,14 @@ import argparse
 import os
 from pathlib import Path
 
+from french_mining.anki.collocation_note_type import MODEL_NAME as COLLOCATION_MODEL_NAME
+from french_mining.anki.collocation_note_type import add_card as add_collocation_card
 from french_mining.anki.connect import AnkiConnectClient
 from french_mining.anki.note_type import DEFAULT_DECK_NAME, MODEL_NAME, add_card
 from french_mining.anki.vocab_state import VocabularyState
 from french_mining.candidates import find_i_plus_1_candidates, select_best_sentences
+from french_mining.collocation_generation import generate_collocation_card_content
+from french_mining.collocations import find_collocation_candidates, load_collocations
 from french_mining.frequency import FrequencyList
 from french_mining.generation import generate_card_content
 from french_mining.images import resolve_image_field
@@ -66,23 +71,33 @@ def main() -> None:
     sentences = parse_transcript(segments)
 
     anki_client = AnkiConnectClient()
-    vocab_state = VocabularyState.build(anki_client, model_names=[MODEL_NAME])
+    vocab_state = VocabularyState.build(
+        anki_client,
+        model_names=[MODEL_NAME],
+        collocation_model_names=[COLLOCATION_MODEL_NAME],
+    )
 
-    candidates = find_i_plus_1_candidates(sentences, vocab_state)
-    for candidate in candidates:
+    word_candidates = find_i_plus_1_candidates(sentences, vocab_state)
+    collocation_candidates = find_collocation_candidates(sentences, vocab_state, load_collocations())
+    all_candidates = word_candidates + collocation_candidates
+    for candidate in all_candidates:
         candidate.video_id = args.video_id
         candidate.source = format_source(metadata, candidate.start_time)
-    best = select_best_sentences(candidates)
+    # Single words and collocations share the same backlog and compete for
+    # the same daily slots (§7), so they're selected/scored/ranked together.
+    best = select_best_sentences(all_candidates)
 
     print(
-        f"{len(sentences)} sentences -> {len(candidates)} i+1 candidates "
+        f"{len(sentences)} sentences -> {len(word_candidates)} word + "
+        f"{len(collocation_candidates)} collocation i+1 candidates "
         f"-> {len(best)} after local best-sentence selection\n"
     )
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("ANTHROPIC_API_KEY not set — skipping Stage 2 API scoring. Stage 1 survivors:\n")
         for c in best:
-            print(f"[{c.target_lemma}] {c.sentence_text}")
+            kind = "collocation" if c.is_collocation else "word"
+            print(f"[{kind}: {c.target_lemma}] {c.sentence_text}")
         return
 
     active_queue_lemmas = [
@@ -100,8 +115,9 @@ def main() -> None:
     print(f"Stage 2: {len(best)} scored -> {len(ranked)} kept, ranked by priority:\n")
     for s in ranked:
         interference = f" [interferes with {s.interference_risk}]" if s.interference_risk else ""
+        kind = "collocation" if s.candidate.is_collocation else "word"
         print(
-            f"{s.priority_score:6.2f}  [{s.candidate.target_lemma}]{interference} "
+            f"{s.priority_score:6.2f}  [{kind}: {s.candidate.target_lemma}]{interference} "
             f"{s.candidate.sentence_text}\n         {s.reasoning}"
         )
 
@@ -109,14 +125,19 @@ def main() -> None:
         return
 
     to_write = ranked[: args.write]
+    word_items = [s for s in to_write if not s.candidate.is_collocation]
+    collocation_items = [s for s in to_write if s.candidate.is_collocation]
+
     print(f"\nDownloading source audio{' + video' if args.with_images else ''} for {args.video_id}...")
     audio_path = download_audio(args.video_id, work_dir)
     video_path = download_video(args.video_id, work_dir) if args.with_images else None
 
-    print(f"Generating content, source audio, and images for {len(to_write)} card(s)...")
-    field_sets = generate_card_content(anthropic_client, to_write)
-    note_ids = []
-    for fields, scored_candidate in zip(field_sets, to_write):
+    print(
+        f"Generating content, source audio, and images for {len(word_items)} word "
+        f"card(s) and {len(collocation_items)} collocation card(s)..."
+    )
+
+    def attach_media_and_image(fields: dict, scored_candidate, gloss_field: str) -> dict:
         media_fields = attach_source_media(anki_client, scored_candidate, audio_path, work_dir / "clips")
         fields.update({k: v for k, v in media_fields.items() if v})
 
@@ -129,15 +150,28 @@ def main() -> None:
             anki_client,
             anthropic_client,
             scored_candidate,
-            fields["TargetWordGloss"],
+            fields[gloss_field],
             frame_path,
             work_dir / "images",
         )
+        return fields
+
+    note_ids = []
+    for fields, scored_candidate in zip(generate_card_content(anthropic_client, word_items), word_items):
+        fields = attach_media_and_image(fields, scored_candidate, "TargetWordGloss")
         note_ids.append(add_card(anki_client, fields))
+
+    for fields, scored_candidate in zip(
+        generate_collocation_card_content(anthropic_client, collocation_items), collocation_items
+    ):
+        fields = attach_media_and_image(fields, scored_candidate, "TargetChunkGloss")
+        note_ids.append(add_collocation_card(anki_client, fields))
 
     print(f"Wrote note IDs: {note_ids}")
 
-    backlog_note_ids = get_new_backlog_note_ids(anki_client, MODEL_NAME, DEFAULT_DECK_NAME)
+    backlog_note_ids = get_new_backlog_note_ids(
+        anki_client, [MODEL_NAME, COLLOCATION_MODEL_NAME], DEFAULT_DECK_NAME
+    )
     merged_order = merge_priority_with_backlog(note_ids, backlog_note_ids)
     rewritten = reorder_queue(anki_client, merged_order)
     print(f"Reordered {len(rewritten)} still-new card(s) in the queue.")
