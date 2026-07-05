@@ -19,7 +19,7 @@ from french_mining.anki.note_type import DEFAULT_DECK_NAME, MODEL_NAME
 from french_mining.anki.vocab_state import VocabularyState
 from french_mining.frequency import FrequencyList
 from french_mining.generation import generate_and_write_cards
-from french_mining.lingq.candidates import find_i_plus_1_candidates, select_best_sentences
+from french_mining.candidates import find_i_plus_1_candidates, select_best_sentences
 from french_mining.lingq.pdf_extract import extract_text
 from french_mining.nlp import parse_text
 from french_mining.queue_ordering import (

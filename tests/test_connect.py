@@ -74,3 +74,20 @@ def test_add_note_sends_expected_payload():
         }
     )
     assert note_id == 12345
+
+
+@responses.activate
+def test_store_media_file_sends_path_and_returns_filename():
+    def request_callback(request):
+        import json
+
+        body = json.loads(request.body)
+        assert body["action"] == "storeMediaFile"
+        assert body["params"]["filename"] == "apercevoir_sentence.mp3"
+        assert body["params"]["path"] == "/tmp/clip.mp3"
+        return (200, {}, '{"result": "apercevoir_sentence.mp3", "error": null}')
+
+    responses.add_callback(responses.POST, URL, callback=request_callback)
+    client = AnkiConnectClient(url=URL)
+    result = client.store_media_file("apercevoir_sentence.mp3", "/tmp/clip.mp3")
+    assert result == "apercevoir_sentence.mp3"

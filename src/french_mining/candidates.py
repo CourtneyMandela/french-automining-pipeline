@@ -41,6 +41,13 @@ class Candidate:
     target_confidence: float
     source: str = ""
     days_since_encountered: float | None = None
+    # Populated only for timestamped transcript sources (YouTube); used to
+    # clip source audio / grab a source frame at the right moment.
+    start_time: float | None = None
+    end_time: float | None = None
+    # Which video this came from, so downstream media steps know which
+    # downloaded audio/video file to clip from when a run covers several.
+    video_id: str | None = None
 
 
 def find_i_plus_1_candidates(
@@ -72,6 +79,8 @@ def find_i_plus_1_candidates(
                 other_lemmas=[t.lemma for t in tokens if t is not target],
                 target_confidence=vocab_state.confidence(target.lemma),
                 source=source,
+                start_time=sentence.start_time,
+                end_time=sentence.end_time,
             )
         )
     return candidates

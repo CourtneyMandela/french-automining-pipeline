@@ -23,8 +23,8 @@ layer, the vocabulary state model, and the note type + write path.
 - [x] API scoring layer (Claude/Sonnet, §6 Stage 2)
 - [x] Card generation (morphology, second examples, translations, §8)
 - [x] Queue ordering via AnkiConnect `due` rewrites (§2)
-- [ ] YouTube pipeline (transcripts, audio clipping, frame extraction)
-- [ ] Image tier logic
+- [x] YouTube pipeline (transcripts, audio clipping, frame extraction)
+- [ ] Image tier logic (talking-head filter, Unsplash fallback)
 - [ ] Collocation card type
 - [ ] Monthly hygiene audit
 
@@ -45,6 +45,9 @@ uv venv --python 3.11 .venv
 uv pip install --python .venv -e ".[dev]"
 cp .env.example .env   # fill in ANTHROPIC_API_KEY etc. as later stages need them
 ```
+
+The YouTube pipeline also needs `ffmpeg` installed as a system binary (not a
+pip package) — `apt install ffmpeg` / `brew install ffmpeg` / equivalent.
 
 Run the tests (no live Anki required — AnkiConnect is mocked):
 
@@ -107,9 +110,10 @@ sourcing (§9) hasn't been built yet — cards will render silently until then.
 `french_mining.lingq.pdf_extract` pulls raw text out of the weekly PDF drop
 (`extract_text`, `extract_text_from_folder`). `french_mining.nlp.parse_text`
 lemmatizes it with spaCy's French model into `ParsedSentence`/`Token`
-objects. `french_mining.lingq.candidates` then does the free, mechanical
-i+1 pre-filter (§6 Stage 1) that's supposed to remove ~90% of candidates
-before any API tokens are spent:
+objects. `french_mining.candidates` then does the free, mechanical i+1
+pre-filter (§6 Stage 1) that's supposed to remove ~90% of candidates
+before any API tokens are spent — this module is shared with the YouTube
+pipeline (below), since none of it is actually LingQ-specific:
 
 - A sentence survives only if **exactly one** word's gradient confidence
   (from `VocabularyState`) falls below `DEFAULT_KNOWN_THRESHOLD` (0.6) — one
@@ -161,12 +165,15 @@ so the response is structured, not free text. Each candidate comes back with:
   "never."
 
 `_priority_score` combines frequency rank, unlock potential, context
-transparency, and recency (`Candidate.days_since_encountered`, currently
-unset by the LingQ pipeline since PDFs don't carry per-sentence timestamps —
-this becomes meaningful once the YouTube pipeline, with real watch dates,
-is built) into the composite score `keep_and_rank` sorts on. Actual queue
-reordering via AnkiConnect `due` rewrites is a separate later stage (§2, §6
-build-order step 6) — this module only scores and ranks.
+transparency, and recency (`Candidate.days_since_encountered`) into the
+composite score `keep_and_rank` sorts on. This is left unset by both
+pipelines currently (LingQ PDFs don't carry timestamps at all; the YouTube
+pipeline has real sentence-level timing via `start_time`/`end_time`, but
+turning that into "days since the *learner* encountered it" needs a
+watched-date, which — per §4 — isn't reliably available from the YouTube
+API without OAuth watch-history access). Actual queue reordering via
+AnkiConnect `due` rewrites is a separate later stage (§2, §6 build-order
+step 6) — this module only scores and ranks.
 
 Requires `ANTHROPIC_API_KEY` in `.env`. `scripts/mine_lingq_pdf.py` runs
 Stage 2 automatically when the key is set, otherwise it just prints Stage 1
@@ -234,18 +241,79 @@ on what you see in Anki even though the values are correctly updated.
 `scripts/mine_lingq_pdf.py --write N` now reorders the queue automatically
 right after writing new cards.
 
+## YouTube pipeline (§4, §9, build-order step 7)
+
+Adds source-audio and source-image richness on top of the same shared i+1
+filter / Stage 2 scoring / card generation used by the LingQ pipeline —
+`french_mining.candidates` was relocated out of `lingq/` to
+`french_mining/candidates.py` for this reason (it was never LingQ-specific,
+and now two pipelines share it).
+
+- `youtube/transcripts.py` — downloads subtitles via yt-dlp and parses
+  WebVTT cues into timestamped segments. YouTube's auto-generated captions
+  are messy (rolling partial-text cues, inline per-word timing tags); the
+  parser strips those tags and drops exact-duplicate consecutive cues
+  rather than trying to reconstruct word-level timing.
+- `nlp.parse_transcript` / `nlp.attach_timestamps` — sentence-segments the
+  concatenated transcript text via spaCy, then maps each sentence back to a
+  time range by locating its text within the transcript and finding which
+  segments overlap it. `attach_timestamps` is pure and spaCy-free (fully
+  tested without the French model); `ParsedSentence` now carries optional
+  `start_time`/`end_time` (`None` for plain-text sources like LingQ PDFs),
+  and `Candidate` carries the same plus `video_id`.
+- `youtube/media.py` — `download_audio`/`download_video` (yt-dlp, needs
+  network) and `clip_audio`/`extract_frame` (ffmpeg, fully local). The
+  clip/extract functions are genuinely integration-tested here against
+  synthetic media generated locally with ffmpeg's `lavfi` test sources — no
+  network needed for that half.
+- `youtube/metadata.py` — YouTube Data API video title/channel lookup, for
+  the §8 Source field format ("title + timestamp"). Watch-history retrieval
+  needs an OAuth scope Google restricts for new API clients, so per §4 this
+  takes a video ID directly rather than trying to surface history
+  automatically.
+- `youtube/pipeline.py` — `attach_source_media` clips the real sentence
+  audio (and, with `--with-images`, grabs a raw source frame at the
+  sentence's midpoint) and stores both via AnkiConnect's `storeMediaFile`
+  (`connect.store_media_file`), returning `[sound:...]`/`<img>` field
+  overrides for `generation.py`'s field dict.
+
+**Talking-head filtering and the Unsplash fallback (§10) are not built
+yet** — that's build-order step 8. This step only grabs the raw frame;
+whether it's any good is step 8's job.
+
+`scripts/mine_youtube_video.py VIDEO_ID --write N [--with-images]` runs the
+full chain: metadata -> subtitles -> spaCy+timing -> i+1 filter -> Stage 2
+scoring -> generation -> source audio/frame attachment -> write -> queue
+reorder.
+
+**Not exercised end-to-end in this session.** Two real network
+dependencies are blocked by this sandboxed session's egress policy (same as
+the spaCy model download in step 3): `youtube.com` (yt-dlp transcript/audio/
+video downloads) and, untested but likely similarly restricted,
+`googleapis.com` (YouTube Data API metadata). What *is* verified here:
+ffmpeg itself works in this environment (it wasn't preinstalled — `apt-get
+install ffmpeg` after fixing a mirror dependency snag got it working), so
+`clip_audio`/`extract_frame` are tested against real ffmpeg output, not
+just mocks — only the yt-dlp download and Data API calls are mocked. Run
+this on your own machine, where none of that is blocked.
+
 ## Project layout
 
 ```
 src/french_mining/
   anki/
-    connect.py      # AnkiConnect JSON-RPC client
+    connect.py      # AnkiConnect JSON-RPC client + storeMediaFile
     vocab_state.py  # gradient known-word model (§5)
     note_type.py    # note type, templates, write path (§8)
   lingq/
     pdf_extract.py  # PDF -> raw text (pypdf)
-    candidates.py   # i+1 pre-filter + best-sentence selection (§6 Stage 1)
-  nlp.py             # spaCy loading + text -> ParsedSentence/Token
+  youtube/
+    transcripts.py  # yt-dlp subtitle download + WebVTT parsing
+    media.py        # yt-dlp audio/video download + ffmpeg clip/frame-extract
+    metadata.py     # YouTube Data API video metadata
+    pipeline.py      # attach_source_media: clip + store audio/frame per card
+  candidates.py      # i+1 pre-filter + best-sentence selection (§6 Stage 1, shared)
+  nlp.py             # spaCy loading + text/transcript -> ParsedSentence/Token
   scoring.py         # Claude/Sonnet API scoring + ranking (§6 Stage 2)
   generation.py      # Claude-generated card content + write path (§8 step 5)
   queue_ordering.py  # AnkiConnect `due` rewrites for the new-card queue (§2)
@@ -254,6 +322,7 @@ src/french_mining/
   frequency.py       # frequency floor + exclusion list loading
 scripts/
   create_placeholder_card.py  # run locally to verify one real card end-to-end
-  mine_lingq_pdf.py           # run locally: full pipeline (extract -> filter -> score -> generate -> write) on a real PDF
-tests/               # all AnkiConnect/Anthropic calls + spaCy model mocked/avoided
+  mine_lingq_pdf.py           # run locally: full pipeline on a real PDF
+  mine_youtube_video.py       # run locally: full pipeline on a real YouTube video
+tests/               # all AnkiConnect/Anthropic/yt-dlp calls mocked; ffmpeg tested for real
 ```

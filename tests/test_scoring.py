@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from french_mining.frequency import FrequencyList
-from french_mining.lingq.candidates import Candidate
+from french_mining.candidates import Candidate
 from french_mining.scoring import (
     build_client,
     keep_and_rank,

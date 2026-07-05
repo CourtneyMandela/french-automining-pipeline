@@ -106,3 +106,14 @@ class AnkiConnectClient:
             newValues=[new_value],
             warning_check=warning_check,
         )
+
+    def store_media_file(self, filename: str, path: str) -> str:
+        """Copy a local file (source audio clip, source frame, TTS output)
+        into Anki's media folder. `path` is an absolute path on the same
+        machine AnkiConnect runs on — since this pipeline only ever runs
+        there too, there's no need to read+base64-encode the file ourselves.
+
+        Returns the filename actually used (AnkiConnect deduplicates by
+        content hash and may return a different name than requested).
+        """
+        return self.invoke("storeMediaFile", filename=filename, path=path)

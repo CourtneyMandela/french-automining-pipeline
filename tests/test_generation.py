@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 
 from french_mining.anki.note_type import FIELD_NAMES, build_note
-from french_mining.lingq.candidates import Candidate
+from french_mining.candidates import Candidate
 from french_mining.generation import (
     generate_and_write_cards,
     generate_card_content,

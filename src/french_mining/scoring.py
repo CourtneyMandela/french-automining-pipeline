@@ -1,6 +1,6 @@
 """Stage 2 API scoring (§6): the only place Claude tokens get spent on
 candidate judgment. Only sentences that survived the free local i+1 filter
-(french_mining.lingq.candidates) ever reach this module.
+(french_mining.candidates) ever reach this module.
 
 Scores each candidate on:
   - i+1 fitness (double-checked in context — the local filter is mechanical
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import anthropic
 
 from french_mining.frequency import FrequencyList
-from french_mining.lingq.candidates import Candidate
+from french_mining.candidates import Candidate
 
 DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_BATCH_SIZE = 20

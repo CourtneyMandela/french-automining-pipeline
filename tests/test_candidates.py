@@ -1,6 +1,6 @@
 from french_mining.anki.vocab_state import VocabularyState
 from french_mining.frequency import FrequencyList
-from french_mining.lingq.candidates import (
+from french_mining.candidates import (
     find_i_plus_1_candidates,
     select_best_sentences,
 )
@@ -114,7 +114,7 @@ def test_sentence_length_bounds_are_respected():
 
 
 def test_select_best_sentences_caps_per_lemma_and_prefers_ideal_length():
-    from french_mining.lingq.candidates import Candidate
+    from french_mining.candidates import Candidate
 
     def make_candidate(lemma: str, n_words: int) -> Candidate:
         return Candidate(
