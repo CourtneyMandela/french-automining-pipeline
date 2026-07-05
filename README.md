@@ -21,7 +21,7 @@ layer, the vocabulary state model, and the note type + write path.
 - [x] Note type + template + write path (`french_mining.anki.note_type`, §8)
 - [x] Local LingQ-PDF pipeline (spaCy extraction, i+1 pre-filter, §6 Stage 1)
 - [x] API scoring layer (Claude/Sonnet, §6 Stage 2)
-- [ ] Card generation (morphology, second examples, translations)
+- [x] Card generation (morphology, second examples, translations, §8)
 - [ ] Queue ordering via AnkiConnect `due` rewrites
 - [ ] YouTube pipeline (transcripts, audio clipping, frame extraction)
 - [ ] Image tier logic
@@ -175,6 +175,37 @@ session (no key configured here) — the test suite covers it with the
 Anthropic client's `messages.create` mocked; real verification needs your
 own API key.
 
+## Card generation (§8, build-order step 5)
+
+`french_mining.generation.generate_card_content` takes `ScoredCandidate`s
+(post Stage 2) and asks Claude — one forced tool call (`submit_card_content`)
+per batch — for the gloss, contextual definition, morphology note, full
+sentence translation, and a second example in a different context. It then
+assembles the complete field dict `note_type.py` expects:
+
+- `SentenceText` is highlighted locally (`highlight_target`), not by the
+  model — the exact surface form came straight out of spaCy tokenization of
+  this sentence, so a plain string replace is more reliable than asking the
+  model to reproduce it verbatim.
+- `FrequencyRank`, `Source`, `TargetWord`/`TargetWordForm` are carried over
+  from earlier stages, not regenerated.
+- `DateMined` defaults to today; audio/image fields stay blank (§9/§10 are
+  later stages) — `note_type.OPTIONAL_FIELDS` already allows this.
+
+`generate_and_write_cards(anki_client, anthropic_client, scored_candidates)`
+chains generation straight into the `add_card` write path from step 2,
+producing real, complete cards.
+
+`scripts/mine_lingq_pdf.py --write N` now runs the full chain — PDF extract
+-> spaCy -> vocab state -> Stage 1 filter -> Stage 2 scoring -> generation ->
+write — capped at the top N ranked candidates so a run can't silently
+generate an unbounded number of cards (and API calls) in one go. Omit
+`--write` (or leave it at the default 0) to just see the ranked Stage 2
+output without writing anything.
+
+Not exercised against the real Anthropic API in this session — covered by
+mocking `messages.create` in tests, same as the scoring layer.
+
 ## Project layout
 
 ```
@@ -188,11 +219,12 @@ src/french_mining/
     candidates.py   # i+1 pre-filter + best-sentence selection (§6 Stage 1)
   nlp.py             # spaCy loading + text -> ParsedSentence/Token
   scoring.py         # Claude/Sonnet API scoring + ranking (§6 Stage 2)
+  generation.py      # Claude-generated card content + write path (§8 step 5)
   data/
     french_frequency_top500.csv
   frequency.py       # frequency floor + exclusion list loading
 scripts/
   create_placeholder_card.py  # run locally to verify one real card end-to-end
-  mine_lingq_pdf.py           # run locally: full Stage 1 + Stage 2 chain on a real PDF
+  mine_lingq_pdf.py           # run locally: full pipeline (extract -> filter -> score -> generate -> write) on a real PDF
 tests/               # all AnkiConnect/Anthropic calls + spaCy model mocked/avoided
 ```
