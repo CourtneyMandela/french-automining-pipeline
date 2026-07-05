@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.env
+.DS_Store
+weekly/
+*.mp3
+*.wav
+*.mp4
+*.jpg
+*.jpeg
+*.png
+!docs/**/*.png
