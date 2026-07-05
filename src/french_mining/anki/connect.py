@@ -117,3 +117,12 @@ class AnkiConnectClient:
         content hash and may return a different name than requested).
         """
         return self.invoke("storeMediaFile", filename=filename, path=path)
+
+    def suspend_cards(self, card_ids: list[int]) -> bool:
+        """Suspend cards (§11 monthly hygiene audit): removes them from the
+        review queue without deleting them — reactivatable anytime via
+        Anki's own UI or the `unsuspend` action.
+        """
+        if not card_ids:
+            return True
+        return self.invoke("suspend", cards=card_ids)

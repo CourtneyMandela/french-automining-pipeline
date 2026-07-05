@@ -91,3 +91,25 @@ def test_store_media_file_sends_path_and_returns_filename():
     client = AnkiConnectClient(url=URL)
     result = client.store_media_file("apercevoir_sentence.mp3", "/tmp/clip.mp3")
     assert result == "apercevoir_sentence.mp3"
+
+
+@responses.activate
+def test_suspend_cards_sends_card_ids():
+    def request_callback(request):
+        import json
+
+        body = json.loads(request.body)
+        assert body["action"] == "suspend"
+        assert body["params"]["cards"] == [101, 102]
+        return (200, {}, '{"result": true, "error": null}')
+
+    responses.add_callback(responses.POST, URL, callback=request_callback)
+    client = AnkiConnectClient(url=URL)
+    assert client.suspend_cards([101, 102]) is True
+
+
+@responses.activate
+def test_suspend_cards_short_circuits_on_empty_list():
+    client = AnkiConnectClient(url=URL)
+    assert client.suspend_cards([]) is True
+    assert len(responses.calls) == 0

@@ -26,7 +26,9 @@ layer, the vocabulary state model, and the note type + write path.
 - [x] YouTube pipeline (transcripts, audio clipping, frame extraction)
 - [x] Image tier logic (talking-head filter, Unsplash fallback, §10)
 - [x] Collocation card type (§7)
-- [ ] Monthly hygiene audit
+- [x] Monthly hygiene audit (§11)
+
+All ten build-order steps from the spec are now implemented.
 
 ## Important: this must run on the same machine as Anki
 
@@ -390,6 +392,37 @@ exhaustive — same caveat as the frequency list: swap in a bigger one via
 `load_collocations("path/to/your.csv")` (same `chunk,lemmas,gloss` format)
 as you find gaps.
 
+## Monthly hygiene audit (§11, build-order step 10)
+
+FSRS has no window into immersion: a word the learner has fully acquired
+by listening/reading keeps cycling through reviews indefinitely, since
+nothing tells the scheduler it's done. `french_mining.hygiene` flags —
+and, with `--suspend`, suspends (never deletes) — cards that are both:
+
+- **mature**: Anki's own scheduled `interval` on the card is already past
+  `DEFAULT_INTERVAL_THRESHOLD_DAYS` (180 days, ~6 months, the spec's own
+  example threshold) — using Anki's already-computed interval directly
+  rather than re-deriving a "projected interval" from FSRS stability.
+- **high-frequency**: the word's frequency rank is within
+  `DEFAULT_FREQUENCY_FLOOR` (top 500) — a word that common would almost
+  certainly be reinforced by immersion long before deliberate review got it
+  this mature, whereas a genuinely rare word reaching the same stability
+  was more likely earned through deliberate study and shouldn't be
+  second-guessed.
+
+This is single-word-only in practice: collocations aren't frequency-ranked
+(§7), so there's no equivalent "obviously acquired by immersion" signal for
+them yet.
+
+```bash
+.venv/bin/python scripts/monthly_hygiene_audit.py            # dry run, just lists candidates
+.venv/bin/python scripts/monthly_hygiene_audit.py --suspend   # actually suspends them
+```
+
+Suspended cards leave the review queue but stay in the deck — reactivatable
+anytime via Anki's own UI or AnkiConnect's `unsuspend` action, nothing is
+destroyed.
+
 ## Project layout
 
 ```
@@ -415,6 +448,7 @@ src/french_mining/
   collocation_generation.py    # collocation card content + write path (§7)
   images.py          # 3-tier image logic: source frame / Unsplash / none (§10)
   queue_ordering.py  # AnkiConnect `due` rewrites for the new-card queue (§2)
+  hygiene.py         # monthly mature+high-frequency card suspension audit (§11)
   data/
     french_frequency_top500.csv
     french_collocations.csv
@@ -424,5 +458,6 @@ scripts/
   create_placeholder_collocation_card.py  # verify the collocation card end-to-end
   mine_lingq_pdf.py           # run locally: full pipeline (words + collocations) on a real PDF
   mine_youtube_video.py       # run locally: full pipeline (words + collocations) on a real YouTube video
+  monthly_hygiene_audit.py    # run locally (or on a schedule): flag/suspend mature cards
 tests/               # all AnkiConnect/Anthropic/yt-dlp calls mocked; ffmpeg tested for real
 ```
