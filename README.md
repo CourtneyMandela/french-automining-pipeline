@@ -12,13 +12,13 @@ moment FSRS takes over.
 
 ## Status
 
-Build-order step 1 (§13.1 of the spec) is done: the AnkiConnect read layer
-and the vocabulary state model.
+Build-order steps 1–2 (§13.1–2 of the spec) are done: the AnkiConnect read
+layer, the vocabulary state model, and the note type + write path.
 
 - [x] AnkiConnect client (`french_mining.anki.connect`)
 - [x] Frequency floor for pre-Anki vocabulary (`french_mining.frequency`)
 - [x] Gradient vocabulary state model (`french_mining.anki.vocab_state`)
-- [ ] Note type + template + write path (§8, build-order step 2)
+- [x] Note type + template + write path (`french_mining.anki.note_type`, §8)
 - [ ] Local LingQ-PDF pipeline (spaCy extraction, i+1 pre-filter)
 - [ ] API scoring layer (Claude/Sonnet)
 - [ ] Card generation (morphology, second examples, translations)
@@ -80,6 +80,28 @@ To override words that rank in the top 500 but you *haven't* actually
 acquired, create an exclusion file (one lemma per line, `#` comments
 allowed) and pass its path as `exclusion_list_path`.
 
+## Note type + write path (§8)
+
+`french_mining.anki.note_type` defines the "French Sentence Mining" note
+type (one card per note) with the exact field list and front/back template
+order from §8: front is just the highlighted sentence + autoplayed word
+audio; back reveals gloss -> full translation -> sentence audio ->
+`TargetWordForm -> TargetWord` -> morphology note -> second example with
+audio -> source -> frequency rank -> image (if present).
+
+`add_card(client, fields)` creates the `French::Mining` deck and the note
+type if they don't already exist, then adds one note. To verify this
+end-to-end against your real Anki app:
+
+```bash
+.venv/bin/python scripts/create_placeholder_card.py
+```
+
+This adds one real card with placeholder content so you can check the
+front/back rendering directly in Anki. Audio fields (`WordAudio`,
+`SentenceAudio`, `SecondExampleAudio`) are optional for now since audio
+sourcing (§9) hasn't been built yet — cards will render silently until then.
+
 ## Project layout
 
 ```
@@ -87,8 +109,11 @@ src/french_mining/
   anki/
     connect.py      # AnkiConnect JSON-RPC client
     vocab_state.py  # gradient known-word model (§5)
+    note_type.py    # note type, templates, write path (§8)
   data/
     french_frequency_top500.csv
   frequency.py       # frequency floor + exclusion list loading
+scripts/
+  create_placeholder_card.py  # run locally to verify one real card end-to-end
 tests/               # all AnkiConnect calls mocked, no live Anki needed
 ```
