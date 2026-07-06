@@ -66,6 +66,13 @@ Run the tests (no live Anki required — AnkiConnect is mocked):
 .venv/bin/pytest
 ```
 
+**Setting this up on a machine for the first time (especially Windows, or
+via a local Claude Code session)?** See
+[`docs/local_setup.md`](docs/local_setup.md) — a step-by-step runbook
+(written for an AI agent to execute, but usable manually too) covering
+prerequisites, `.env` configuration, AnkiConnect verification, and a first
+real mining run.
+
 ## Vocabulary state model (§5)
 
 `VocabularyState.build(client, model_names=[...], tested_field="TargetWord")`
