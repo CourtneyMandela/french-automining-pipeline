@@ -5,6 +5,7 @@ and frame extraction are via ffmpeg (fully local, no network needed).
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from pathlib import Path
 
 # Clip a little before/after the transcript-timed sentence boundary --
@@ -97,6 +98,67 @@ def clip_audio(
         str(output_path),
     ]
     subprocess.run(cmd, check=True, capture_output=True, text=True)
+    return output_path
+
+
+def concat_audio_spans(
+    source_path: str | Path,
+    spans: list[tuple[float, float]],
+    output_path: str | Path,
+    padding: float = DEFAULT_PADDING_SECONDS,
+) -> Path:
+    """Concatenate the given `[start, end]` spans of `source_path` into one
+    audio file (condensed audio — everything between the spans, e.g. silence
+    and non-comprehensible speech, is dropped).
+
+    Single ffmpeg pass: each span is `atrim`med, PTS-reset, then `concat`ed.
+    The filter graph is written to a temp script file (`-filter_complex_script`)
+    so a run with many spans can't blow the command-line length limit. Padding
+    matches `clip_audio`'s rationale — subtitle timings aren't frame-accurate,
+    so a little slack avoids clipping the first/last syllable of each span.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not spans:
+        raise ValueError("concat_audio_spans requires at least one span")
+
+    filters = []
+    labels = []
+    for i, (start, end) in enumerate(spans):
+        clip_start = max(0.0, start - padding)
+        clip_end = end + padding
+        filters.append(
+            f"[0:a]atrim=start={clip_start:.3f}:end={clip_end:.3f},"
+            f"asetpts=PTS-STARTPTS[a{i}]"
+        )
+        labels.append(f"[a{i}]")
+    filters.append(f"{''.join(labels)}concat=n={len(spans)}:v=0:a=1[out]")
+    filter_graph = ";".join(filters)
+
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
+        fh.write(filter_graph)
+        script_path = fh.name
+
+    try:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source_path),
+            "-filter_complex_script",
+            script_path,
+            "-map",
+            "[out]",
+            "-acodec",
+            "libmp3lame",
+            "-ar",
+            "44100",
+            str(output_path),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    finally:
+        Path(script_path).unlink(missing_ok=True)
     return output_path
 
 

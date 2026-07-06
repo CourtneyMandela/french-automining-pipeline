@@ -34,6 +34,8 @@ Beyond the original spec:
 
 - [x] LingQ API sync — read on LingQ, looked-up words auto-flow into the
   pipeline with no PDF drop (`french_mining.lingq.api`, `scripts/mine_lingq_api.py`)
+- [x] Condensed audio — comprehensibility-filtered listening material from
+  watched videos (`french_mining.condensed_audio`, `scripts/build_condensed_audio.py`)
 
 ## Important: this must run on the same machine as Anki
 
@@ -404,6 +406,60 @@ needs (`cv2/data/*.xml` was empty in 5.0.0 when I checked). The vision
 check and Unsplash calls themselves are mocked in tests, same as the rest
 of the Anthropic API surface.
 
+## Condensed audio from watched videos (beyond the spec)
+
+A second output from the *same* watched YouTube videos, alongside cards:
+comprehensibility-filtered **condensed audio** — a dense, silence-free
+audio file / playlist made only of the sentences you can already follow,
+for passive listening review (commutes, walks).
+
+It's a natural fit because the pipeline already has the two hard
+ingredients — subtitle-timed transcripts (`nlp.parse_transcript` gives
+sentence-segmented, timed, lemmatized `ParsedSentence`s) and an FSRS-backed
+model of what you know (`VocabularyState`). So this is **entirely local and
+free — zero Anthropic API cost** (yt-dlp + ffmpeg + spaCy + AnkiConnect
+only), fitting the §3 cost philosophy.
+
+`french_mining.condensed_audio`:
+
+- `sentence_comprehensibility` — fraction of a sentence's content words
+  that are already known (`confidence >= 0.6`, the pipeline's standard
+  known bar).
+- `select_comprehensible_spans` — keeps sentences at/above
+  `--min-comprehensibility` (default **0.9** — audio has no visual support,
+  and this is review of already-watched material, so aim high), drops the
+  rest, and **merges adjacent kept spans** (within ~0.4s) so the result
+  isn't a stutter of micro-cuts. Sentences without timing are skipped.
+- `video_comprehensibility` — overall coverage, used to order a multi-video
+  playlist easiest-first.
+
+`youtube.media.concat_audio_spans` does the actual condensing: a single
+ffmpeg pass (`atrim`+`concat` via a `-filter_complex_script` file, so many
+spans can't blow the command-line limit), mirroring `clip_audio`'s codec
+and padding choices.
+
+```bash
+.venv/bin/python scripts/build_condensed_audio.py VIDEO_ID [VIDEO_ID ...]
+.venv/bin/python scripts/build_condensed_audio.py --ids-file watched.txt --single-file
+```
+
+Produces `<video_id>_condensed.mp3` per video, an easiest-first
+`condensed_playlist.m3u`, and (with `--single-file`) one stitched
+`condensed_all.mp3`. Reads Anki vocab state but writes no cards.
+
+**Tradeoff (your choice):** dropping individual hard sentences maximizes
+comprehensible density but sacrifices some narrative continuity — the
+adjacent-merge + padding soften the cuts, and a low-comprehension video
+will yield little or no audio at the 0.9 bar (expected). Videos without
+subtitles have no timing to cut on; a Whisper fallback (your existing
+Latin/Whisper approach) is a sensible future extension.
+
+**Verified here:** the comprehensibility/selection logic is fully
+unit-tested (no spaCy model needed), and `concat_audio_spans` is tested
+against **real ffmpeg** using synthetic audio (output duration ≈ sum of
+kept spans). Not runnable end-to-end in this sandbox (yt-dlp network + the
+spaCy model are blocked) — first real run is on your machine.
+
 ## Collocation card type (§7, build-order step 9)
 
 Fluency is largely chunk-level, not word-level. Single words and
@@ -506,11 +562,12 @@ src/french_mining/
     api.py          # LingQ v3 API client + looked-up-word candidate builder
   youtube/
     transcripts.py  # yt-dlp subtitle download + WebVTT parsing
-    media.py        # yt-dlp audio/video download + ffmpeg clip/frame-extract
+    media.py        # yt-dlp audio/video download + ffmpeg clip/concat/frame-extract
     metadata.py     # YouTube Data API video metadata
     pipeline.py      # attach_source_media: clip + store audio/frame per card
   candidates.py             # i+1 pre-filter + best-sentence selection (§6 Stage 1, shared)
   collocations.py            # collocation matcher -> generic Candidate (§7)
+  condensed_audio.py         # comprehensibility scoring + span selection for condensed audio
   nlp.py                     # spaCy loading + text/transcript -> ParsedSentence/Token
   scoring.py                  # Claude/Sonnet API scoring + ranking (§6 Stage 2, shared)
   generation.py                # single-word card content + write path (§8 step 5)
@@ -529,6 +586,7 @@ scripts/
   mine_lingq_pdf.py           # run locally: full pipeline (words + collocations) on a real PDF
   mine_lingq_api.py           # run locally (or scheduled): sync looked-up LingQs -> Anki
   mine_youtube_video.py       # run locally: full pipeline (words + collocations) on a real YouTube video
+  build_condensed_audio.py    # run locally: comprehensibility-filtered condensed audio from watched videos
   monthly_hygiene_audit.py    # run locally (or on a schedule): flag/suspend mature cards
 tests/               # all AnkiConnect/Anthropic/yt-dlp calls mocked; ffmpeg tested for real
 ```
