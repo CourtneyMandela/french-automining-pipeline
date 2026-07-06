@@ -25,6 +25,15 @@ DEFAULT_MIN_COMPREHENSIBILITY = 0.9
 # one span, so the output isn't a stutter of micro-cuts across natural pauses.
 DEFAULT_MERGE_GAP_SECONDS = 0.4
 
+# Target length for a shuffle-friendly clip (§ chunking): long enough for a
+# coherent mini-scene, short enough that shuffling a playlist and skipping a
+# dud clip actually works, unlike one long file per video.
+DEFAULT_CLIP_SECONDS = 180.0  # ~3 minutes
+
+# A chunk closes once the next span would push it past target*this multiplier
+# -- bounds overshoot while still never splitting an individual span.
+DEFAULT_MAX_CLIP_MULTIPLIER = 1.5
+
 # Per-word "known" bar — the same gradient-confidence threshold the rest of
 # the pipeline treats as known (§5).
 KNOWN_THRESHOLD = 0.6
@@ -102,3 +111,50 @@ def _merge_spans(spans: list[tuple[float, float]], merge_gap: float) -> list[tup
 
 def total_duration(spans: list[tuple[float, float]]) -> float:
     return sum(end - start for start, end in spans)
+
+
+def chunk_spans(
+    spans: list[tuple[float, float]],
+    target_duration: float = DEFAULT_CLIP_SECONDS,
+    max_duration: float | None = None,
+) -> list[list[tuple[float, float]]]:
+    """Greedily group already-merged spans (in time order) into shuffle-
+    friendly, clip-sized chunks — a playlist of a video's own few-minute
+    clips rather than one long file, so a player's shuffle is actually
+    meaningful and a dud clip is easy to skip past.
+
+    Never splits an individual span (each is already one continuous,
+    smoothed piece of speech from `select_comprehensible_spans`'s merge
+    step — cutting into one would just chop a sentence group awkwardly). A
+    chunk closes as soon as it reaches `target_duration` (typical clips land
+    just at/over the target, not drifting toward `max_duration`); separately,
+    if the *next* span alone would push a still-under-target chunk past
+    `max_duration` (default `target_duration * DEFAULT_MAX_CLIP_MULTIPLIER`)
+    it closes early instead, so one big span never gets compounded onto a
+    partial chunk. Either way, a single span longer than `max_duration` still
+    ends up alone in its own (over-length) chunk rather than being dropped or
+    split. The final chunk absorbs whatever's left, which may be shorter than
+    the target -- expected for a video's leftover tail.
+    """
+    if max_duration is None:
+        max_duration = target_duration * DEFAULT_MAX_CLIP_MULTIPLIER
+
+    chunks: list[list[tuple[float, float]]] = []
+    current: list[tuple[float, float]] = []
+    current_duration = 0.0
+
+    for span in sorted(spans):
+        span_duration = span[1] - span[0]
+        if current and (
+            current_duration >= target_duration
+            or current_duration + span_duration > max_duration
+        ):
+            chunks.append(current)
+            current = []
+            current_duration = 0.0
+        current.append(span)
+        current_duration += span_duration
+
+    if current:
+        chunks.append(current)
+    return chunks

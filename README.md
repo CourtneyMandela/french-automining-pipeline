@@ -411,9 +411,9 @@ of the Anthropic API surface.
 ## Condensed audio from watched videos (beyond the spec)
 
 A second output from the *same* watched YouTube videos, alongside cards:
-comprehensibility-filtered **condensed audio** — a dense, silence-free
-audio file / playlist made only of the sentences you can already follow,
-for passive listening review (commutes, walks).
+comprehensibility-filtered **condensed audio** — a playlist of dense,
+silence-free, few-minutes-each **clips** made only of the sentences you can
+already follow, for passive listening review (commutes, walks).
 
 It's a natural fit because the pipeline already has the two hard
 ingredients — subtitle-timed transcripts (`nlp.parse_transcript` gives
@@ -432,31 +432,44 @@ only), fitting the §3 cost philosophy.
   and this is review of already-watched material, so aim high), drops the
   rest, and **merges adjacent kept spans** (within ~0.4s) so the result
   isn't a stutter of micro-cuts. Sentences without timing are skipped.
-- `video_comprehensibility` — overall coverage, used to order a multi-video
-  playlist easiest-first.
+- `video_comprehensibility` — overall coverage, used to order the playlist
+  easiest-video-first.
+- `chunk_spans` — groups a video's merged spans into shuffle-friendly clips
+  around `--clip-minutes` (default **3**), *without ever splitting a span*.
+  One big file (per video, or the whole corpus) has the same "always listen
+  to the start, scrub to find your place" problem as any long audio file —
+  clips are what make a player's shuffle actually useful, and a dud clip is
+  easy to skip past. A clip always stays within one video (never splices two
+  videos together); a video's leftover tail shorter than the target just
+  becomes its own shorter final clip. A single span longer than the target
+  on its own (rare) still isn't split — it becomes its own over-length clip.
 
-`youtube.media.concat_audio_spans` does the actual condensing: a single
-ffmpeg pass (`atrim`+`concat` via a `-filter_complex_script` file, so many
-spans can't blow the command-line limit), mirroring `clip_audio`'s codec
-and padding choices.
+`youtube.media.concat_audio_spans` does the actual condensing (once per
+clip): a single ffmpeg pass (`atrim`+`concat` via a `-filter_complex_script`
+file, so many spans can't blow the command-line limit), mirroring
+`clip_audio`'s codec and padding choices.
 
 ```bash
 .venv/bin/python scripts/build_condensed_audio.py VIDEO_ID [VIDEO_ID ...]
-.venv/bin/python scripts/build_condensed_audio.py --ids-file watched.txt --single-file
+.venv/bin/python scripts/build_condensed_audio.py --ids-file watched.txt --clip-minutes 3 --single-file
 ```
 
-Produces `<video_id>_condensed.mp3` per video, an easiest-first
-`condensed_playlist.m3u`, and (with `--single-file`) one stitched
-`condensed_all.mp3`. Reads Anki vocab state but writes no cards.
+Produces `<video_id>_clip01.mp3`, `_clip02.mp3`, ... per video, and an
+easiest-video-first `condensed_playlist.m3u` listing every clip across every
+video — shuffle *that* in your player. `--single-file` is an **opt-in
+extra** (stitches every clip into one `condensed_all.mp3`) for anyone who
+still wants that; it's not the default, since it's the exact one-big-file
+pattern the clips are meant to replace. Reads Anki vocab state but writes no
+cards.
 
 **Tradeoff (your choice):** dropping individual hard sentences maximizes
 comprehensible density but sacrifices some narrative continuity — the
 adjacent-merge + padding soften the cuts, and a low-comprehension video
-will yield little or no audio at the 0.9 bar (expected). Videos without
+will yield few or no clips at the 0.9 bar (expected). Videos without
 captions have no timing to cut on out of the box — see the Whisper
 fallback below, which covers exactly that case.
 
-**Verified here:** the comprehensibility/selection logic is fully
+**Verified here:** the comprehensibility/selection/chunking logic is fully
 unit-tested (no spaCy model needed), and `concat_audio_spans` is tested
 against **real ffmpeg** using synthetic audio (output duration ≈ sum of
 kept spans). Not runnable end-to-end in this sandbox (yt-dlp network + the
