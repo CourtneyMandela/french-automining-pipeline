@@ -37,8 +37,8 @@ from french_mining.queue_ordering import (
 from french_mining.scoring import build_client, keep_and_rank, score_candidates
 from french_mining.youtube.media import download_audio, download_video
 from french_mining.youtube.metadata import fetch_video_metadata, format_source
-from french_mining.youtube.pipeline import attach_source_media, grab_source_frame
-from french_mining.youtube.transcripts import download_subtitles, load_transcript
+from french_mining.youtube.pipeline import attach_source_media, get_transcript, grab_source_frame
+from french_mining.youtube.whisper_transcribe import DEFAULT_MODEL_SIZE as DEFAULT_WHISPER_MODEL_SIZE
 
 
 def main() -> None:
@@ -57,6 +57,12 @@ def main() -> None:
         action="store_true",
         help="Also download the video (not just audio) and attach a source frame per card.",
     )
+    parser.add_argument(
+        "--no-whisper-fallback",
+        action="store_true",
+        help="Skip videos with no captions instead of transcribing them locally with Whisper.",
+    )
+    parser.add_argument("--whisper-model", default=DEFAULT_WHISPER_MODEL_SIZE)
     parser.add_argument("--work-dir", default="youtube_work")
     args = parser.parse_args()
 
@@ -66,8 +72,16 @@ def main() -> None:
     metadata = fetch_video_metadata(args.video_id)
     print(f"Video: {metadata.title} ({metadata.channel_title})\n")
 
-    vtt_path = download_subtitles(args.video_id, work_dir, lang=args.lang)
-    segments = load_transcript(vtt_path)
+    # Falls back to local Whisper transcription (no API cost, just slower)
+    # when the video has no captions at all.
+    segments, transcript_source = get_transcript(
+        args.video_id,
+        work_dir,
+        lang=args.lang,
+        use_whisper_fallback=not args.no_whisper_fallback,
+        whisper_model_size=args.whisper_model,
+    )
+    print(f"Transcript source: {transcript_source}")
     sentences = parse_transcript(segments)
 
     anki_client = AnkiConnectClient()

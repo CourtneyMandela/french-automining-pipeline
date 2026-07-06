@@ -27,7 +27,8 @@ from french_mining.condensed_audio import (
 )
 from french_mining.nlp import parse_transcript
 from french_mining.youtube.media import concat_audio_spans, download_audio
-from french_mining.youtube.transcripts import download_subtitles, load_transcript
+from french_mining.youtube.pipeline import get_transcript
+from french_mining.youtube.whisper_transcribe import DEFAULT_MODEL_SIZE as DEFAULT_WHISPER_MODEL_SIZE
 
 
 def _read_video_ids(args) -> list[str]:
@@ -50,6 +51,12 @@ def main() -> None:
                         help="Playlist order: easiest-first (default) or as given.")
     parser.add_argument("--single-file", action="store_true",
                         help="Also concatenate everything into one condensed MP3.")
+    parser.add_argument(
+        "--no-whisper-fallback",
+        action="store_true",
+        help="Skip videos with no captions instead of transcribing them locally with Whisper.",
+    )
+    parser.add_argument("--whisper-model", default=DEFAULT_WHISPER_MODEL_SIZE)
     parser.add_argument("--work-dir", default="condensed_audio")
     args = parser.parse_args()
 
@@ -71,8 +78,18 @@ def main() -> None:
     for video_id in video_ids:
         vid_dir = work_dir / video_id
         audio_path = download_audio(video_id, vid_dir)
-        vtt_path = download_subtitles(video_id, vid_dir, lang=args.lang)
-        sentences = parse_transcript(load_transcript(vtt_path))
+        # Falls back to local Whisper transcription (no API cost, just
+        # slower) when the video has no captions at all -- otherwise those
+        # videos would silently contribute nothing.
+        segments, transcript_source = get_transcript(
+            video_id,
+            vid_dir,
+            lang=args.lang,
+            use_whisper_fallback=not args.no_whisper_fallback,
+            whisper_model_size=args.whisper_model,
+        )
+        sentences = parse_transcript(segments)
+        print(f"[{video_id}] transcript source: {transcript_source}")
 
         spans = select_comprehensible_spans(
             sentences, vocab_state, min_comprehensibility=args.min_comprehensibility

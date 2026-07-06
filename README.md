@@ -36,6 +36,8 @@ Beyond the original spec:
   pipeline with no PDF drop (`french_mining.lingq.api`, `scripts/mine_lingq_api.py`)
 - [x] Condensed audio — comprehensibility-filtered listening material from
   watched videos (`french_mining.condensed_audio`, `scripts/build_condensed_audio.py`)
+- [x] Whisper transcription fallback for videos with no captions
+  (`french_mining.youtube.whisper_transcribe`, `youtube.pipeline.get_transcript`)
 
 ## Important: this must run on the same machine as Anki
 
@@ -451,14 +453,48 @@ Produces `<video_id>_condensed.mp3` per video, an easiest-first
 comprehensible density but sacrifices some narrative continuity — the
 adjacent-merge + padding soften the cuts, and a low-comprehension video
 will yield little or no audio at the 0.9 bar (expected). Videos without
-subtitles have no timing to cut on; a Whisper fallback (your existing
-Latin/Whisper approach) is a sensible future extension.
+captions have no timing to cut on out of the box — see the Whisper
+fallback below, which covers exactly that case.
 
 **Verified here:** the comprehensibility/selection logic is fully
 unit-tested (no spaCy model needed), and `concat_audio_spans` is tested
 against **real ffmpeg** using synthetic audio (output duration ≈ sum of
 kept spans). Not runnable end-to-end in this sandbox (yt-dlp network + the
 spaCy model are blocked) — first real run is on your machine.
+
+## Whisper transcription fallback (beyond the spec)
+
+Not every watched video has captions. Without a fallback, those videos
+would silently contribute nothing to either cards or condensed audio — no
+transcript, no timing, no candidates. `french_mining.youtube.pipeline.get_transcript`
+is the single entry point both `mine_youtube_video.py` and
+`build_condensed_audio.py` now use: try YouTube's own captions first
+(`transcripts.download_subtitles`, free and instant), and only if that
+fails, fall back to local transcription with
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+(`youtube.whisper_transcribe`) — CTranslate2-based, no PyTorch dependency,
+int8 CPU inference. Still **zero API cost**, just slower than downloading
+captions (real speech-to-text inference vs. a file download).
+
+`get_transcript` returns `(segments, source)` so both scripts can report
+which path was taken. Flags on both scripts: `--whisper-model` (default
+`"small"` — balances accuracy/speed/download size for a background job;
+`"base"` is faster/smaller, `"medium"`/`"large-v3"` more accurate) and
+`--no-whisper-fallback` (skip captionless videos instead of transcribing
+them, if you'd rather not pay the CPU time).
+
+`media.download_audio` now skips re-downloading if the target file already
+exists in the working directory — needed because the Whisper fallback path
+and (for `mine_youtube_video.py --write`) the later card-audio-clipping
+step can both want the same downloaded audio within one run.
+
+**Verified here:** `transcribe_with_whisper` accepts an injectable `model`
+(duck-typed: anything with a `.transcribe()` method), so it's tested
+without downloading real model weights; `get_transcript`'s captions-first/
+Whisper-fallback branching is tested with both paths mocked. The real
+faster-whisper model download (first use, ~500MB for "small", from Hugging
+Face) and actual transcription are not exercised in this sandbox (blocked
+network) — first real run is on your machine.
 
 ## Collocation card type (§7, build-order step 9)
 
@@ -561,10 +597,11 @@ src/french_mining/
     pdf_extract.py  # PDF -> raw text (pypdf)
     api.py          # LingQ v3 API client + looked-up-word candidate builder
   youtube/
-    transcripts.py  # yt-dlp subtitle download + WebVTT parsing
-    media.py        # yt-dlp audio/video download + ffmpeg clip/concat/frame-extract
-    metadata.py     # YouTube Data API video metadata
-    pipeline.py      # attach_source_media: clip + store audio/frame per card
+    transcripts.py         # yt-dlp subtitle download + WebVTT parsing
+    whisper_transcribe.py  # local Whisper fallback transcription (faster-whisper)
+    media.py               # yt-dlp audio/video download + ffmpeg clip/concat/frame-extract
+    metadata.py            # YouTube Data API video metadata
+    pipeline.py             # get_transcript (captions->Whisper fallback); attach_source_media/grab_source_frame per card
   candidates.py             # i+1 pre-filter + best-sentence selection (§6 Stage 1, shared)
   collocations.py            # collocation matcher -> generic Candidate (§7)
   condensed_audio.py         # comprehensibility scoring + span selection for condensed audio

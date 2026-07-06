@@ -15,6 +15,7 @@ dependencies = [
     # Pinned below 5.0: that release dropped the bundled Haar cascade XML
     # files (cv2/data/*.xml) that the talking-head pre-filter needs.
     "opencv-python-headless>=4.8,<5",
+    "faster-whisper>=1.0",  # local transcription fallback for videos with no captions
 ]
 
 [project.optional-dependencies]

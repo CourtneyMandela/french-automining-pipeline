@@ -1,11 +1,12 @@
 import subprocess
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from french_mining.candidates import Candidate
+from french_mining.nlp import TranscriptSegment
 from french_mining.scoring import ScoredCandidate
-from french_mining.youtube.pipeline import attach_source_media, grab_source_frame
+from french_mining.youtube.pipeline import attach_source_media, get_transcript, grab_source_frame
 
 
 def ffmpeg_available() -> bool:
@@ -125,3 +126,49 @@ def test_safe_filename_part_sanitizes_special_characters():
 
     assert _safe_filename_part("s'apercevoir") == "s_apercevoir"
     assert _safe_filename_part("") == "word"
+
+
+# -- get_transcript (captions vs. Whisper fallback) --------------------------
+
+
+@patch("french_mining.youtube.pipeline.load_transcript")
+@patch("french_mining.youtube.pipeline.download_subtitles")
+def test_get_transcript_uses_captions_when_available(mock_download_subs, mock_load, tmp_path):
+    mock_download_subs.return_value = tmp_path / "vid.fr.vtt"
+    expected = [TranscriptSegment(start=0.0, end=2.0, text="Bonjour.")]
+    mock_load.return_value = expected
+
+    segments, source = get_transcript("vid123", tmp_path)
+
+    assert segments == expected
+    assert source == "captions"
+    mock_download_subs.assert_called_once_with("vid123", tmp_path, lang="fr")
+
+
+@patch("french_mining.youtube.pipeline.transcribe_with_whisper")
+@patch("french_mining.youtube.pipeline.download_audio")
+@patch("french_mining.youtube.pipeline.download_subtitles")
+def test_get_transcript_falls_back_to_whisper_when_no_captions(
+    mock_download_subs, mock_download_audio, mock_transcribe, tmp_path
+):
+    mock_download_subs.side_effect = RuntimeError("no subtitle file")
+    mock_download_audio.return_value = tmp_path / "vid123.mp3"
+    expected = [TranscriptSegment(start=0.0, end=1.5, text="Bonjour.")]
+    mock_transcribe.return_value = expected
+
+    segments, source = get_transcript("vid123", tmp_path, lang="fr")
+
+    assert segments == expected
+    assert source == "whisper"
+    mock_download_audio.assert_called_once_with("vid123", tmp_path)
+    mock_transcribe.assert_called_once_with(
+        tmp_path / "vid123.mp3", language="fr", model_size="small"
+    )
+
+
+@patch("french_mining.youtube.pipeline.download_subtitles")
+def test_get_transcript_reraises_when_fallback_disabled(mock_download_subs, tmp_path):
+    mock_download_subs.side_effect = RuntimeError("no subtitle file")
+
+    with pytest.raises(RuntimeError, match="no subtitle file"):
+        get_transcript("vid123", tmp_path, use_whisper_fallback=False)

@@ -160,6 +160,17 @@ def test_download_audio_calls_yt_dlp_and_locates_output(mock_run, tmp_path):
 
 
 @patch("french_mining.youtube.media.subprocess.run")
+def test_download_audio_skips_redownload_when_file_already_exists(mock_run, tmp_path):
+    existing = tmp_path / "vid123.mp3"
+    existing.write_bytes(b"already downloaded")
+
+    result = download_audio("vid123", tmp_path)
+
+    assert result == existing
+    mock_run.assert_not_called()
+
+
+@patch("french_mining.youtube.media.subprocess.run")
 def test_download_audio_raises_when_no_file_produced(mock_run, tmp_path):
     mock_run.return_value = MagicMock(returncode=0)
     with pytest.raises(RuntimeError, match="vid123"):

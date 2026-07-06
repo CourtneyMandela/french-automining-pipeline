@@ -9,8 +9,38 @@ from __future__ import annotations
 from pathlib import Path
 
 from french_mining.anki.connect import AnkiConnectClient
+from french_mining.nlp import TranscriptSegment
 from french_mining.scoring import ScoredCandidate
-from french_mining.youtube.media import clip_audio, extract_frame
+from french_mining.youtube.media import clip_audio, download_audio, extract_frame
+from french_mining.youtube.transcripts import download_subtitles, load_transcript
+from french_mining.youtube.whisper_transcribe import DEFAULT_MODEL_SIZE, transcribe_with_whisper
+
+
+def get_transcript(
+    video_id: str,
+    work_dir: str | Path,
+    lang: str = "fr",
+    use_whisper_fallback: bool = True,
+    whisper_model_size: str = DEFAULT_MODEL_SIZE,
+) -> tuple[list[TranscriptSegment], str]:
+    """Get timestamped transcript segments for a video: try YouTube's own
+    captions first (free, instant), and fall back to local Whisper
+    transcription of the downloaded audio when no captions exist at all
+    (not every watched video has them). Whisper is slower but has no API
+    cost — it just needs the audio, which this downloads (or reuses if
+    already present in `work_dir`, per `media.download_audio`).
+
+    Returns `(segments, source)` where `source` is `"captions"` or
+    `"whisper"`, so callers can report which path was taken.
+    """
+    try:
+        vtt_path = download_subtitles(video_id, work_dir, lang=lang)
+        return load_transcript(vtt_path), "captions"
+    except RuntimeError:
+        if not use_whisper_fallback:
+            raise
+        audio_path = download_audio(video_id, work_dir)
+        return transcribe_with_whisper(audio_path, language=lang, model_size=whisper_model_size), "whisper"
 
 
 def _safe_filename_part(lemma: str) -> str:

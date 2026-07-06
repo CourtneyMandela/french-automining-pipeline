@@ -17,9 +17,19 @@ DEFAULT_PADDING_SECONDS = 0.15
 def download_audio(video_id: str, output_dir: str | Path) -> Path:
     """Download the best available audio track via yt-dlp. Requires network
     access to YouTube.
+
+    Skips the download if the target file already exists in `output_dir` --
+    within one run, the Whisper-fallback transcript path and the later
+    card-audio-clipping step can both want this same file; no need to fetch
+    it twice.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = output_dir / f"{video_id}.mp3"
+    if existing.exists():
+        return existing
+
     output_template = str(output_dir / f"{video_id}.%(ext)s")
     cmd = [
         "yt-dlp",
