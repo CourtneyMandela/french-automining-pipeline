@@ -36,8 +36,9 @@ FIELD_NAMES = [
     "DateMined",
 ]
 
-# Audio fields are optional for now because audio sourcing (§9) hasn't been
-# fully wired into the collocation path yet.
+# ChunkAudio/SecondExampleAudio come from french_mining.tts (ElevenLabs) and
+# SentenceAudio from a clipped source video -- both stay optional since
+# either can go unconfigured/unavailable for a given card.
 OPTIONAL_FIELDS = {"Image", "SentenceAudio", "ChunkAudio", "SecondExampleAudio"}
 
 CSS = """

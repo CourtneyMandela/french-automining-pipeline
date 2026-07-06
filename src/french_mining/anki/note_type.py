@@ -41,9 +41,10 @@ FIELD_NAMES = [
 ]
 
 # Fields that may legitimately be blank on some cards (e.g. no image tier
-# succeeded, or a word predates frequency-rank data). Audio fields are
-# optional for now because audio sourcing (§9) hasn't been built yet; once
-# it lands, WordAudio/SentenceAudio should be tightened to required.
+# succeeded, or a word predates frequency-rank data). WordAudio/
+# SecondExampleAudio come from french_mining.tts (ElevenLabs) and
+# SentenceAudio from a clipped source video (youtube.pipeline) -- both stay
+# optional since either can go unconfigured/unavailable for a given card.
 OPTIONAL_FIELDS = {"Image", "FrequencyRank", "SentenceAudio", "WordAudio", "SecondExampleAudio"}
 
 CSS = """

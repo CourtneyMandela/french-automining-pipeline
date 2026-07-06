@@ -18,6 +18,11 @@ from french_mining.collocation_generation import generate_collocation_card_conte
 from french_mining.generation import generate_card_content
 from french_mining.images import resolve_image_field
 from french_mining.scoring import ScoredCandidate
+from french_mining.tts import resolve_tts_fields
+
+
+def _safe_filename_part(lemma: str) -> str:
+    return "".join(c if c.isalnum() else "_" for c in lemma) or "word"
 
 
 def write_ranked_candidates(
@@ -25,10 +30,15 @@ def write_ranked_candidates(
     anthropic_client: anthropic.Anthropic,
     ranked_to_write: list[ScoredCandidate],
     image_work_dir: str,
+    audio_work_dir: str = "tts_audio",
 ) -> list[int]:
-    """Generate content, resolve images (Unsplash-only), and write each
-    ranked candidate — single words and collocations to their respective
-    note types. Returns new note IDs in input order.
+    """Generate content, resolve images (Unsplash-only) and word/second-
+    example audio (ElevenLabs TTS, opt-in via `ELEVENLABS_API_KEY`), and
+    write each ranked candidate — single words and collocations to their
+    respective note types. Returns new note IDs in input order.
+
+    `SentenceAudio` stays blank for text sources (LingQ PDFs/API) — there's
+    no source video to clip it from, unlike the YouTube pipeline.
     """
     word_items = [s for s in ranked_to_write if not s.candidate.is_collocation]
     collocation_items = [s for s in ranked_to_write if s.candidate.is_collocation]
@@ -39,6 +49,16 @@ def write_ranked_candidates(
         fields["Image"] = resolve_image_field(
             anki_client, anthropic_client, scored, fields["TargetWordGloss"], frame_path=None, work_dir=image_work_dir
         )
+        fields.update(
+            resolve_tts_fields(
+                anki_client,
+                fields["TargetWordForm"],
+                fields["SecondExample"],
+                audio_work_dir,
+                _safe_filename_part(scored.candidate.target_lemma),
+                target_field_name="WordAudio",
+            )
+        )
         note_ids.append(add_card(anki_client, fields))
 
     for fields, scored in zip(
@@ -46,6 +66,16 @@ def write_ranked_candidates(
     ):
         fields["Image"] = resolve_image_field(
             anki_client, anthropic_client, scored, fields["TargetChunkGloss"], frame_path=None, work_dir=image_work_dir
+        )
+        fields.update(
+            resolve_tts_fields(
+                anki_client,
+                fields["TargetChunkForm"],
+                fields["SecondExample"],
+                audio_work_dir,
+                _safe_filename_part(scored.candidate.target_lemma),
+                target_field_name="ChunkAudio",
+            )
         )
         note_ids.append(add_collocation_card(anki_client, fields))
 

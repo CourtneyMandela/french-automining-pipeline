@@ -113,8 +113,10 @@ end-to-end against your real Anki app:
 
 This adds one real card with placeholder content so you can check the
 front/back rendering directly in Anki. Audio fields (`WordAudio`,
-`SentenceAudio`, `SecondExampleAudio`) are optional for now since audio
-sourcing (§9) hasn't been built yet — cards will render silently until then.
+`SentenceAudio`, `SecondExampleAudio`) stay optional — `SentenceAudio` needs
+a clipped source video (YouTube pipeline only), and `WordAudio`/
+`SecondExampleAudio` need `ELEVENLABS_API_KEY` configured (see "Word/second-
+example audio" below) — cards render silently without them.
 
 ## Local LingQ-PDF pipeline (§6 Stage 1)
 
@@ -407,6 +409,42 @@ that release stopped bundling the Haar cascade XML files this pre-filter
 needs (`cv2/data/*.xml` was empty in 5.0.0 when I checked). The vision
 check and Unsplash calls themselves are mocked in tests, same as the rest
 of the Anthropic API surface.
+
+## Word/second-example audio (§9, beyond the spec so far)
+
+Source video only gives us real speech for `SentenceAudio` (clipped by
+`youtube.pipeline.attach_source_media`), and only when a sentence's timing
+survived transcript alignment. Two fields have no possible source clip at
+all: `WordAudio`/`ChunkAudio` (the target word spoken in isolation — there's
+no isolated-word moment in the video to cut) and `SecondExampleAudio` (a
+sentence Claude wrote during generation, so it was never actually spoken by
+anyone). `french_mining.tts` fills both via the ElevenLabs API
+(`eleven_multilingual_v2`, a French-capable premade voice by default,
+override with `ELEVENLABS_VOICE_ID`):
+
+- `synthesize_speech(text, output_path, api_key=...)` — one REST call per
+  clip, writes the returned MP3 bytes to disk.
+- `strip_html` — removes the `<span class="target">` highlight wrapper
+  before speaking `SecondExample`, so TTS reads plain text.
+- `resolve_tts_fields(anki_client, target_text, second_example_html,
+  work_dir, name_part, target_field_name="WordAudio"|"ChunkAudio")` —
+  synthesizes both clips, stores them via AnkiConnect's `storeMediaFile`,
+  and returns the `[sound:...]` field values.
+
+This is opt-in and fails open, the same tier-skip pattern as the Unsplash
+image fallback: with no `ELEVENLABS_API_KEY` set, `resolve_tts_fields`
+returns both fields blank instead of raising, so the rest of the write path
+is unaffected. It's wired into both `text_pipeline.write_ranked_candidates`
+(LingQ PDF/API — `SentenceAudio` stays blank there regardless, no source
+video to clip it from) and `mine_youtube_video.py` (alongside source-audio/
+image attachment). Tested with the `responses` library mocking the
+ElevenLabs endpoint — no real API key or network needed for
+`tests/test_tts.py`.
+
+**Not run against the real ElevenLabs API in this session** (no network to
+elevenlabs.io in this sandbox) — get a key at https://elevenlabs.io/, set
+`ELEVENLABS_API_KEY` in `.env`, and the next mining run will start filling
+these fields in.
 
 ## Condensed audio from watched videos (beyond the spec)
 

@@ -35,6 +35,7 @@ from french_mining.queue_ordering import (
     reorder_queue,
 )
 from french_mining.scoring import build_client, keep_and_rank, score_candidates
+from french_mining.tts import resolve_tts_fields
 from french_mining.youtube.media import download_audio, download_video
 from french_mining.youtube.metadata import fetch_video_metadata, format_source
 from french_mining.youtube.pipeline import attach_source_media, get_transcript, grab_source_frame
@@ -151,7 +152,9 @@ def main() -> None:
         f"card(s) and {len(collocation_items)} collocation card(s)..."
     )
 
-    def attach_media_and_image(fields: dict, scored_candidate, gloss_field: str) -> dict:
+    def attach_media_and_image(
+        fields: dict, scored_candidate, gloss_field: str, form_field: str, audio_field_name: str
+    ) -> dict:
         media_fields = attach_source_media(anki_client, scored_candidate, audio_path, work_dir / "clips")
         fields.update({k: v for k, v in media_fields.items() if v})
 
@@ -168,17 +171,30 @@ def main() -> None:
             frame_path,
             work_dir / "images",
         )
+        name_part = "".join(c if c.isalnum() else "_" for c in scored_candidate.candidate.target_lemma) or "word"
+        fields.update(
+            resolve_tts_fields(
+                anki_client,
+                fields[form_field],
+                fields["SecondExample"],
+                work_dir / "tts",
+                name_part,
+                target_field_name=audio_field_name,
+            )
+        )
         return fields
 
     note_ids = []
     for fields, scored_candidate in zip(generate_card_content(anthropic_client, word_items), word_items):
-        fields = attach_media_and_image(fields, scored_candidate, "TargetWordGloss")
+        fields = attach_media_and_image(fields, scored_candidate, "TargetWordGloss", "TargetWordForm", "WordAudio")
         note_ids.append(add_card(anki_client, fields))
 
     for fields, scored_candidate in zip(
         generate_collocation_card_content(anthropic_client, collocation_items), collocation_items
     ):
-        fields = attach_media_and_image(fields, scored_candidate, "TargetChunkGloss")
+        fields = attach_media_and_image(
+            fields, scored_candidate, "TargetChunkGloss", "TargetChunkForm", "ChunkAudio"
+        )
         note_ids.append(add_collocation_card(anki_client, fields))
 
     print(f"Wrote note IDs: {note_ids}")
